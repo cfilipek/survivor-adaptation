@@ -1,7 +1,5 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
-
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -219,17 +217,6 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
     }
   }
 
-  // Group organisms by environment for the environment phase
-  const organismsByEnvironment = organisms.reduce(
-    (acc, organism) => {
-      const env = organism.environment
-      if (!acc[env]) acc[env] = []
-      acc[env].push(organism)
-      return acc
-    },
-    {} as Record<Environment, Organism[]>,
-  )
-
   return (
     <main className="flex min-h-screen flex-col items-center p-8 bg-gradient-to-b from-green-900 to-green-950">
       <div className="w-full max-w-6xl">
@@ -302,53 +289,13 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
             </CardFooter>
           </Card>
         ) : gameState === "environment" ? (
-          <div className="space-y-8">
-            <Card className="bg-green-800 border-green-700">
-              <CardHeader>
-                <CardTitle className="text-green-100">Environment Phase</CardTitle>
-                <CardDescription className="text-green-200">
-                  Each organism will face its chosen environment
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(organismsByEnvironment).map(([env, envOrganisms]) => (
-                    <div key={env} className="bg-green-700 p-4 rounded-lg">
-                      <h3 className="text-lg font-medium text-green-100 mb-2">{env}</h3>
-                      <p className="text-green-200 mb-4">Organisms: {envOrganisms.length}</p>
-                      <div className="flex flex-wrap gap-2">
-                        {envOrganisms.map((org) => (
-                          <Badge key={org.id} className="bg-green-600">
-                            {org.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-              <CardFooter className="flex justify-between">
-                <Button
-                  variant="outline"
-                  onClick={moveToCityPhase}
-                  className="border-green-600 text-green-100 hover:bg-green-700"
-                >
-                  Skip to City Phase
-                </Button>
-                <Button onClick={runEnvironmentPhase} className="bg-green-600 hover:bg-green-500">
-                  Run Environment Simulation
-                </Button>
-              </CardFooter>
-            </Card>
-
-            <EnvironmentSimulation
-              environment="All"
-              organisms={organisms}
-              onRunSimulation={runEnvironmentPhase}
-              onNextEnvironment={() => {}}
-              onMoveToCityPhase={moveToCityPhase}
-            />
-          </div>
+          <EnvironmentSimulation
+            environment="All"
+            organisms={organisms}
+            onRunSimulation={runEnvironmentPhase}
+            onNextEnvironment={() => {}}
+            onMoveToCityPhase={moveToCityPhase}
+          />
         ) : gameState === "city" ? (
           <CitySimulation organisms={organisms.filter((o) => o.status !== "extinct")} onRunSimulation={runCityPhase} />
         ) : gameState === "results" ? (
