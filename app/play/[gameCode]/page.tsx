@@ -50,6 +50,12 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
       router.push("/join")
     }
 
+    // Check if this specific game code has been submitted by this player
+    const submittedGames = JSON.parse(localStorage.getItem("submittedGames") || "[]")
+    if (submittedGames.includes(gameCode)) {
+      setHasSubmitted(true)
+    }
+
     // Listen for game state changes
     const unsubscribeGameState = listenForGameState(gameCode, (state) => {
       setGameState(state || "waiting")
@@ -85,10 +91,10 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
 
     // Apply contra-stats effects
     if (contraStats[stat as StatName] && change > 0) {
-      contraStats[stat as StatName].forEach(contraStat => {
+      contraStats[stat as StatName].forEach((contraStat) => {
         // Reduce contra-stats by 2 points per point added, but don't go below 0
         const currentContraValue = newStats[contraStat] || 0
-        const newContraValue = Math.max(0, currentContraValue - (change * 2))
+        const newContraValue = Math.max(0, currentContraValue - change * 2)
         newStats[contraStat] = newContraValue
       })
     }
@@ -118,6 +124,13 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     try {
       // Add organism to Firebase
       await addOrganism(gameCode, playerName, organism)
+
+      // Store this game code in localStorage to prevent resubmission
+      const submittedGames = JSON.parse(localStorage.getItem("submittedGames") || "[]")
+      if (!submittedGames.includes(gameCode)) {
+        submittedGames.push(gameCode)
+        localStorage.setItem("submittedGames", JSON.stringify(submittedGames))
+      }
 
       toast({
         title: "Organism Created",
@@ -266,13 +279,13 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
                     <div className="flex justify-between">
                       <div>
                         <Label htmlFor={stat} className="text-green-100 capitalize">
-                          {stat.replace(/([A-Z])/g, ' $1').trim()}
+                          {stat.replace(/([A-Z])/g, " $1").trim()}
                         </Label>
                         {contraStats[stat] && contraStats[stat].length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-1">
-                            {contraStats[stat].map(contraStat => (
+                            {contraStats[stat].map((contraStat) => (
                               <Badge key={contraStat} variant="outline" className="text-xs text-red-300 border-red-400">
-                                -{contraStat.replace(/([A-Z])/g, ' $1').trim()}
+                                -{contraStat.replace(/([A-Z])/g, " $1").trim()}
                               </Badge>
                             ))}
                           </div>
@@ -307,7 +320,7 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
                       ([stat, value]) =>
                         value > 0 && (
                           <li key={stat} className="text-green-200">
-                            <span className="capitalize">{stat.replace(/([A-Z])/g, ' $1').trim()}</span>: {value}
+                            <span className="capitalize">{stat.replace(/([A-Z])/g, " $1").trim()}</span>: {value}
                           </li>
                         ),
                     )}

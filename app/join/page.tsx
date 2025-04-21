@@ -52,6 +52,11 @@ export default function JoinGame() {
       localStorage.setItem("playerName", playerName)
       localStorage.setItem("gameCode", gameCode)
 
+      // Clear any previous submission state for this game code
+      const submittedGames = JSON.parse(localStorage.getItem("submittedGames") || "[]")
+      const updatedSubmittedGames = submittedGames.filter((code: string) => code !== gameCode)
+      localStorage.setItem("submittedGames", JSON.stringify(updatedSubmittedGames))
+
       // Redirect to the organism creation page
       router.push(`/play/${gameCode}`)
     } catch (err: any) {

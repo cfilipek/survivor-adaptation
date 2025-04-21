@@ -105,6 +105,9 @@ export default function EnvironmentSimulation({
       setEvent(getRandomEvent(environment as Environment))
     }
 
+    // Call the onRunSimulation prop function
+    // Make sure we're actually calling the function passed from the parent
+    console.log("Calling onRunSimulation from EnvironmentSimulation component")
     onRunSimulation()
 
     // After a delay, show results

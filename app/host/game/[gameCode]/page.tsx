@@ -67,8 +67,13 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
   }
 
   const runEnvironmentPhase = async () => {
+    console.log("Running environment phase simulation")
+
     // Process environment survival for all organisms in their chosen environments
     const updatedOrganisms = organisms.map((organism) => {
+      // Skip already extinct organisms
+      if (organism.status === "extinct") return organism
+
       // Calculate survival based on organism's chosen environment and stats
       const compatibility = calculateCompatibility(organism, organism.environment)
       let newStatus = organism.status
@@ -93,7 +98,13 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
       // Update organisms in Firebase
       await updateOrganisms(gameCode, updatedOrganisms)
       setOrganisms(updatedOrganisms)
+
+      toast({
+        title: "Simulation Complete",
+        description: "Environment phase simulation has been completed",
+      })
     } catch (error) {
+      console.error("Error updating organisms:", error)
       toast({
         title: "Error",
         description: "Failed to update organisms",
