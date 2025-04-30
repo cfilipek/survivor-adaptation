@@ -1,5 +1,16 @@
 import { initializeApp } from "firebase/app"
-import { getDatabase, ref, set, onValue, push, get, update, remove } from "firebase/database"
+import {
+  getDatabase,
+  ref,
+  set,
+  onValue,
+  push,
+  get,
+  update,
+  remove,
+  onDisconnect,
+  serverTimestamp,
+} from "firebase/database"
 import { getAuth } from "firebase/auth"
 import type { Organism, GameState } from "./game-types"
 
@@ -19,6 +30,21 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig)
 const database = getDatabase(app)
 const auth = getAuth(app)
+
+// Enable offline persistence
+try {
+  // Enable offline capabilities
+  const connectedRef = ref(database, ".info/connected")
+  onValue(connectedRef, (snap) => {
+    if (snap.val() === true) {
+      console.log("Connected to Firebase")
+    } else {
+      console.log("Disconnected from Firebase")
+    }
+  })
+} catch (error) {
+  console.error("Error setting up Firebase persistence:", error)
+}
 
 // Generate a random 6-character game code
 const generateGameCode = () => {
@@ -66,37 +92,85 @@ export const checkGameExists = async (gameCode: string) => {
   return snapshot.exists()
 }
 
-// Join a game
-export const joinGame = async (gameCode: string, playerName: string) => {
+// Join a game with retry logic
+export const joinGame = async (gameCode: string, playerName: string, maxRetries = 3) => {
   // Check if game exists
-  const gameExists = await checkGameExists(gameCode)
-  if (!gameExists) {
-    throw new Error("Game not found")
+  let retries = 0
+  let success = false
+  let lastError: any = null
+
+  while (retries < maxRetries && !success) {
+    try {
+      const gameExists = await checkGameExists(gameCode)
+      if (!gameExists) {
+        throw new Error("Game not found")
+      }
+
+      // Add player to game with server timestamp
+      const playersRef = ref(database, `games/${gameCode}/players`)
+      const newPlayerRef = push(playersRef)
+      await set(newPlayerRef, {
+        name: playerName,
+        joinedAt: serverTimestamp(),
+        online: true,
+      })
+
+      // Set up disconnect handler
+      const onlineRef = ref(database, `games/${gameCode}/players/${newPlayerRef.key}/online`)
+      onDisconnect(onlineRef).set(false)
+
+      success = true
+      return true
+    } catch (error) {
+      lastError = error
+      retries++
+      console.log(`Join attempt ${retries} failed, retrying...`)
+      // Wait before retrying (exponential backoff)
+      await new Promise((resolve) => setTimeout(resolve, 1000 * retries))
+    }
   }
 
-  // Add player to game
-  const playersRef = ref(database, `games/${gameCode}/players`)
-  const newPlayerRef = push(playersRef)
-  await set(newPlayerRef, {
-    name: playerName,
-    joinedAt: new Date().toISOString(),
-  })
-
-  return true
+  if (!success) {
+    console.error("Failed to join game after multiple attempts:", lastError)
+    throw lastError || new Error("Failed to join game")
+  }
 }
 
-// Add organism to game
-export const addOrganism = async (gameCode: string, playerName: string, organism: Organism) => {
-  const organismsRef = ref(database, `games/${gameCode}/organisms`)
-  const newOrganismRef = push(organismsRef)
+// Add organism to game with retry logic
+export const addOrganism = async (gameCode: string, playerName: string, organism: Organism, maxRetries = 3) => {
+  let retries = 0
+  let success = false
+  let lastError: any = null
+  let organismWithPlayer: Organism & { playerName: string; id?: string | null } = { ...organism, playerName }
 
-  const organismWithPlayer = {
-    ...organism,
-    playerName,
-    id: newOrganismRef.key,
+  while (retries < maxRetries && !success) {
+    try {
+      const organismsRef = ref(database, `games/${gameCode}/organisms`)
+      const newOrganismRef = push(organismsRef)
+
+      organismWithPlayer = {
+        ...organism,
+        playerName,
+        id: newOrganismRef.key,
+        createdAt: serverTimestamp(),
+      }
+
+      await set(newOrganismRef, organismWithPlayer)
+      success = true
+    } catch (error) {
+      lastError = error
+      retries++
+      console.log(`Organism submission attempt ${retries} failed, retrying...`)
+      // Wait before retrying (exponential backoff)
+      await new Promise((resolve) => setTimeout(resolve, 1000 * retries))
+    }
   }
 
-  await set(newOrganismRef, organismWithPlayer)
+  if (!success) {
+    console.error("Failed to submit organism after multiple attempts:", lastError)
+    throw lastError || new Error("Failed to submit organism")
+  }
+
   return organismWithPlayer
 }
 

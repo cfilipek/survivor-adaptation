@@ -56,21 +56,51 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
       setHasSubmitted(true)
     }
 
-    // Listen for game state changes
-    const unsubscribeGameState = listenForGameState(gameCode, (state) => {
-      setGameState(state || "waiting")
-    })
+    // Set up Firebase listeners with error handling
+    let unsubscribeGameState: () => void = () => {}
+    let unsubscribeEnvironment: () => void = () => {}
+    let retryCount = 0
+    const maxRetries = 3
 
-    // Listen for current environment changes
-    const unsubscribeEnvironment = listenForCurrentEnvironment(gameCode, (environment) => {
-      setCurrentEnvironment(environment as Environment)
-    })
+    const setupListeners = () => {
+      try {
+        // Listen for game state changes
+        unsubscribeGameState = listenForGameState(gameCode, (state) => {
+          setGameState(state || "waiting")
+        })
+
+        // Listen for current environment changes
+        unsubscribeEnvironment = listenForCurrentEnvironment(gameCode, (environment) => {
+          setCurrentEnvironment(environment as Environment)
+        })
+
+        retryCount = 0 // Reset retry count on success
+      } catch (error) {
+        console.error("Error setting up Firebase listeners:", error)
+
+        if (retryCount < maxRetries) {
+          retryCount++
+          console.log(`Retrying listener setup (${retryCount}/${maxRetries})...`)
+          // Exponential backoff
+          setTimeout(setupListeners, 1000 * retryCount)
+        } else {
+          toast({
+            title: "Connection Error",
+            description: "Failed to connect to the game. Please refresh the page.",
+            variant: "destructive",
+          })
+        }
+      }
+    }
+
+    setupListeners()
 
     return () => {
-      unsubscribeGameState()
-      unsubscribeEnvironment()
+      // Clean up listeners
+      if (unsubscribeGameState) unsubscribeGameState()
+      if (unsubscribeEnvironment) unsubscribeEnvironment()
     }
-  }, [gameCode, router])
+  }, [gameCode, router, toast])
 
   const handleStatChange = (stat: string, value: number) => {
     const currentValue = organism.stats[stat] || 0
@@ -122,7 +152,7 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     setIsSubmitting(true)
 
     try {
-      // Add organism to Firebase
+      // Add organism to Firebase with retry logic built into the function
       await addOrganism(gameCode, playerName, organism)
 
       // Store this game code in localStorage to prevent resubmission
@@ -139,9 +169,10 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
 
       setHasSubmitted(true)
     } catch (err) {
+      console.error("Submission error:", err)
       toast({
         title: "Submission Error",
-        description: "Failed to submit your organism",
+        description: "Failed to submit your organism. Please try again.",
         variant: "destructive",
       })
     } finally {

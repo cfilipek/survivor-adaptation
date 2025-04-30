@@ -30,17 +30,46 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
     } else {
       // If no host name is found, redirect to create page
       router.push("/host/create")
+      return
     }
 
-    // Listen for organisms updates from Firebase
-    const unsubscribe = listenForOrganisms(gameCode, (updatedOrganisms) => {
-      setOrganisms(updatedOrganisms)
-    })
+    // Set up Firebase listeners with error handling and retry logic
+    let unsubscribe: () => void = () => {}
+    let retryCount = 0
+    const maxRetries = 3
+
+    const setupListener = () => {
+      try {
+        // Listen for organisms updates from Firebase
+        unsubscribe = listenForOrganisms(gameCode, (updatedOrganisms) => {
+          setOrganisms(updatedOrganisms)
+        })
+
+        retryCount = 0 // Reset retry count on success
+      } catch (error) {
+        console.error("Error setting up Firebase listener:", error)
+
+        if (retryCount < maxRetries) {
+          retryCount++
+          console.log(`Retrying listener setup (${retryCount}/${maxRetries})...`)
+          // Exponential backoff
+          setTimeout(setupListener, 1000 * retryCount)
+        } else {
+          toast({
+            title: "Connection Error",
+            description: "Failed to connect to the game data. Please refresh the page.",
+            variant: "destructive",
+          })
+        }
+      }
+    }
+
+    setupListener()
 
     return () => {
-      unsubscribe()
+      if (unsubscribe) unsubscribe()
     }
-  }, [gameCode, router])
+  }, [gameCode, router, toast])
 
   const startGame = async () => {
     if (organisms.length === 0) {
@@ -53,12 +82,30 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
     }
 
     try {
-      await updateGameState(gameCode, "environment")
+      // Update game state with retry logic
+      let success = false
+      let attempts = 0
+      const maxAttempts = 3
+
+      while (!success && attempts < maxAttempts) {
+        try {
+          await updateGameState(gameCode, "environment")
+          success = true
+        } catch (error) {
+          attempts++
+          console.log(`Start game attempt ${attempts} failed, retrying...`)
+          if (attempts >= maxAttempts) throw error
+          // Wait before retrying (exponential backoff)
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempts))
+        }
+      }
+
       setGameState("environment")
     } catch (error) {
+      console.error("Error starting game:", error)
       toast({
         title: "Error",
-        description: "Failed to start game",
+        description: "Failed to start game. Please try again.",
         variant: "destructive",
       })
     }

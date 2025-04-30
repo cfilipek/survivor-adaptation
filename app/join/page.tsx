@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { joinGame, checkGameExists } from "@/lib/firebase"
+import { joinGame } from "@/lib/firebase"
 import { useToast } from "@/components/ui/use-toast"
 
 export default function JoinGame() {
@@ -22,45 +22,43 @@ export default function JoinGame() {
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!gameCode) {
-      setError("Please enter a game code")
+    if (!playerName.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter your name",
+        variant: "destructive",
+      })
       return
     }
 
-    if (!playerName) {
-      setError("Please enter your name")
+    if (!gameCode.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter a game code",
+        variant: "destructive",
+      })
       return
     }
 
     setIsJoining(true)
-    setError("")
 
     try {
-      // Check if game exists
-      const exists = await checkGameExists(gameCode)
-
-      if (!exists) {
-        setError("Game not found. Check the code and try again.")
-        setIsJoining(false)
-        return
-      }
-
-      // Join the game
+      // Join game with retry logic built into the function
       await joinGame(gameCode, playerName)
 
-      // Store player info in localStorage for persistence
+      // Save player info to localStorage
       localStorage.setItem("playerName", playerName)
-      localStorage.setItem("gameCode", gameCode)
 
-      // Clear any previous submission state for this game code
-      const submittedGames = JSON.parse(localStorage.getItem("submittedGames") || "[]")
-      const updatedSubmittedGames = submittedGames.filter((code: string) => code !== gameCode)
-      localStorage.setItem("submittedGames", JSON.stringify(updatedSubmittedGames))
-
-      // Redirect to the organism creation page
+      // Redirect to game page
       router.push(`/play/${gameCode}`)
-    } catch (err: any) {
-      setError(err.message || "Failed to join game")
+    } catch (error) {
+      console.error("Error joining game:", error)
+      toast({
+        title: "Join Error",
+        description: "Failed to join the game. Please check the game code and try again.",
+        variant: "destructive",
+      })
+    } finally {
       setIsJoining(false)
     }
   }
