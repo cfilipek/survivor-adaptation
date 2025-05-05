@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +17,14 @@ export default function JoinGame() {
   const [isJoining, setIsJoining] = useState(false)
   const router = useRouter()
   const { toast } = useToast()
+
+  // Load stored player name if available
+  useEffect(() => {
+    const storedName = localStorage.getItem("playerName")
+    if (storedName) {
+      setPlayerName(storedName)
+    }
+  }, [])
 
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -53,6 +60,7 @@ export default function JoinGame() {
       router.push(`/play/${gameCode}`)
     } catch (error) {
       console.error("Error joining game:", error)
+      setError("Failed to join the game. Please check the game code and try again.")
       toast({
         title: "Join Error",
         description: "Failed to join the game. Please check the game code and try again.",

@@ -31,20 +31,91 @@ const app = initializeApp(firebaseConfig)
 const database = getDatabase(app)
 const auth = getAuth(app)
 
-// Enable offline persistence
+// Enable offline persistence and connection monitoring
+let connectionStatus: {
+  isConnected: boolean
+  isReconnecting: boolean
+  lastUpdated: number
+  listeners: Set<(status: { isConnected: boolean; isReconnecting: boolean }) => void>
+  subscribe: (callback: (status: { isConnected: boolean; isReconnecting: boolean }) => void) => () => void
+  updateStatus: (connected: boolean, reconnecting: boolean) => void
+}
+
 try {
   // Enable offline capabilities
   const connectedRef = ref(database, ".info/connected")
+
+  // Create a connection status object that components can subscribe to
+  connectionStatus = {
+    isConnected: true,
+    isReconnecting: false,
+    lastUpdated: Date.now(),
+    listeners: new Set<(status: { isConnected: boolean; isReconnecting: boolean }) => void>(),
+
+    // Method to subscribe to connection changes
+    subscribe(callback: (status: { isConnected: boolean; isReconnecting: boolean }) => void) {
+      this.listeners.add(callback)
+      // Immediately call with current status
+      callback({ isConnected: this.isConnected, isReconnecting: this.isReconnecting })
+      return () => this.listeners.delete(callback)
+    },
+
+    // Method to update status and notify listeners
+    updateStatus(connected: boolean, reconnecting: boolean) {
+      this.isConnected = connected
+      this.isReconnecting = reconnecting
+      this.lastUpdated = Date.now()
+      this.listeners.forEach((callback) =>
+        callback({ isConnected: this.isConnected, isReconnecting: this.isReconnecting }),
+      )
+    },
+  }
+
   onValue(connectedRef, (snap) => {
-    if (snap.val() === true) {
+    const connected = snap.val() === true
+
+    if (connected) {
       console.log("Connected to Firebase")
+      connectionStatus.updateStatus(true, false)
     } else {
       console.log("Disconnected from Firebase")
+      connectionStatus.updateStatus(false, true)
+
+      // Set a timeout to check if we're still disconnected after a delay
+      setTimeout(() => {
+        if (!connectionStatus.isConnected) {
+          console.log("Still disconnected after timeout, attempting to reconnect...")
+          // Force a reconnection attempt
+          database.goOnline()
+        }
+      }, 5000)
     }
   })
+
+  // Add additional connection state listeners
+  const dbRef = ref(database, ".info/serverTimeOffset")
+  onValue(
+    dbRef,
+    () => {
+      // If we get here, we have a successful server connection
+      if (connectionStatus.isReconnecting) {
+        console.log("Successfully reconnected to game session")
+        connectionStatus.updateStatus(true, false)
+      }
+    },
+    (error) => {
+      console.error("Error connecting to Firebase:", error)
+      connectionStatus.updateStatus(false, true)
+    },
+  )
 } catch (error) {
   console.error("Error setting up Firebase persistence:", error)
+  if (connectionStatus) {
+    connectionStatus.updateStatus(false, false)
+  }
 }
+
+export { connectionStatus }
 
 // Generate a random 6-character game code
 const generateGameCode = () => {
@@ -99,10 +170,14 @@ export const joinGame = async (gameCode: string, playerName: string, maxRetries 
   let success = false
   let lastError: any = null
 
+  // Update connection status to show we're attempting to connect
+  connectionStatus.updateStatus(connectionStatus.isConnected, true)
+
   while (retries < maxRetries && !success) {
     try {
       const gameExists = await checkGameExists(gameCode)
       if (!gameExists) {
+        connectionStatus.updateStatus(true, false) // Reset reconnecting state
         throw new Error("Game not found")
       }
 
@@ -120,6 +195,7 @@ export const joinGame = async (gameCode: string, playerName: string, maxRetries 
       onDisconnect(onlineRef).set(false)
 
       success = true
+      connectionStatus.updateStatus(true, false) // Reset reconnecting state
       return true
     } catch (error) {
       lastError = error
@@ -132,6 +208,7 @@ export const joinGame = async (gameCode: string, playerName: string, maxRetries 
 
   if (!success) {
     console.error("Failed to join game after multiple attempts:", lastError)
+    connectionStatus.updateStatus(false, false) // Update to disconnected state
     throw lastError || new Error("Failed to join game")
   }
 }
@@ -142,6 +219,9 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
   let success = false
   let lastError: any = null
   let organismWithPlayer: Organism & { playerName: string; id?: string | null } = { ...organism, playerName }
+
+  // Update connection status to show we're attempting to connect
+  connectionStatus.updateStatus(connectionStatus.isConnected, true)
 
   while (retries < maxRetries && !success) {
     try {
@@ -157,6 +237,7 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
 
       await set(newOrganismRef, organismWithPlayer)
       success = true
+      connectionStatus.updateStatus(true, false) // Reset reconnecting state
     } catch (error) {
       lastError = error
       retries++
@@ -168,6 +249,7 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
 
   if (!success) {
     console.error("Failed to submit organism after multiple attempts:", lastError)
+    connectionStatus.updateStatus(false, false) // Update to disconnected state
     throw lastError || new Error("Failed to submit organism")
   }
 

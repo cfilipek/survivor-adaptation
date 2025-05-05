@@ -15,6 +15,8 @@ import { Badge } from "@/components/ui/badge"
 import type { Organism, Kingdom, Environment, GameState, StatName } from "@/lib/game-types"
 import { kingdomStats, contraStats } from "@/lib/game-types"
 import { addOrganism, listenForGameState, listenForCurrentEnvironment } from "@/lib/firebase"
+import { connectionStatus } from "@/lib/firebase"
+import ConnectionStatus from "@/components/connection-status"
 
 export default function PlayGame({ params }: { params: { gameCode: string } }) {
   const { gameCode } = params
@@ -35,6 +37,18 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
   const [availablePoints, setAvailablePoints] = useState(11)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasSubmitted, setHasSubmitted] = useState(false)
+  const [connectionState, setConnectionState] = useState<{ isConnected: boolean; isReconnecting: boolean }>({
+    isConnected: true,
+    isReconnecting: false,
+  })
+
+  useEffect(() => {
+    const unsubscribe = connectionStatus.subscribe((status) => {
+      setConnectionState(status)
+    })
+
+    return () => unsubscribe()
+  }, [])
 
   useEffect(() => {
     // Load player info from localStorage
@@ -200,6 +214,7 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center justify-center py-12">
+            <ConnectionStatus className="mb-4" />
             <div className="w-32 h-32 bg-green-700 rounded-full flex items-center justify-center mb-6">
               <div className="text-4xl">🧬</div>
             </div>

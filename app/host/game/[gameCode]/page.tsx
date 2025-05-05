@@ -11,6 +11,7 @@ import EnvironmentSimulation from "@/components/environment-simulation"
 import CitySimulation from "@/components/city-simulation"
 import ResultsDisplay from "@/components/results-display"
 import { listenForOrganisms, updateGameState, updateOrganisms, deleteGame } from "@/lib/firebase"
+import ConnectionStatus from "@/components/connection-status"
 
 export default function HostGame({ params }: { params: { gameCode: string } }) {
   const { gameCode } = params
@@ -276,6 +277,7 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
           </div>
 
           <div className="flex items-center gap-4">
+            <ConnectionStatus />
             <div className="bg-green-700 px-4 py-2 rounded-md">
               <p className="text-green-100">Players: {organisms.length}</p>
             </div>
