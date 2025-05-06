@@ -4,6 +4,8 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AlertCircle } from "lucide-react"
 import type { Organism } from "@/lib/game-types"
 import OrganismCard from "./organism-card"
 
@@ -15,6 +17,11 @@ interface CitySimulationProps {
 export default function CitySimulation({ organisms, onRunSimulation }: CitySimulationProps) {
   const [phase, setPhase] = useState<"intro" | "simulation" | "results">("intro")
   const [challenge, setChallenge] = useState<string | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Ensure organisms is an array and filter out any invalid entries
+  const safeOrganisms = Array.isArray(organisms) ? organisms.filter(Boolean) : []
 
   const getCityDescription = () => {
     return "The concrete jungle of New York City presents unique challenges. Urban environments have limited natural resources, pollution, artificial lighting, and constant human activity. Only the most adaptable organisms will survive here."
@@ -34,15 +41,32 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
     return challenges[Math.floor(Math.random() * challenges.length)]
   }
 
-  const runSimulation = () => {
+  const runSimulation = async () => {
+    setIsProcessing(true)
     setPhase("simulation")
     setChallenge(getRandomChallenge())
+    setError(null)
 
-    // After a delay, run the simulation and show results
-    setTimeout(() => {
-      onRunSimulation()
-      setPhase("results")
-    }, 3000)
+    try {
+      // After a delay, run the simulation and show results
+      setTimeout(async () => {
+        try {
+          await onRunSimulation()
+          setPhase("results")
+        } catch (err) {
+          console.error("Error running city simulation:", err)
+          setError("An error occurred during the city simulation. Please try again.")
+          setPhase("intro")
+        } finally {
+          setIsProcessing(false)
+        }
+      }, 3000)
+    } catch (err) {
+      console.error("Error setting up city simulation:", err)
+      setError("An error occurred while setting up the simulation. Please try again.")
+      setPhase("intro")
+      setIsProcessing(false)
+    }
   }
 
   return (
@@ -58,11 +82,18 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
             </CardDescription>
           </div>
           <div className="bg-green-700 px-3 py-1 rounded-md">
-            <p className="text-green-100">Organisms: {organisms.length}</p>
+            <p className="text-green-100">Organisms: {safeOrganisms.length}</p>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
         {phase === "intro" && (
           <div className="space-y-4">
             <div className="relative h-64 overflow-hidden rounded-lg">
@@ -89,8 +120,8 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {organisms.map((organism, index) => (
-                <OrganismCard key={index} organism={organism} />
+              {safeOrganisms.map((organism, index) => (
+                <OrganismCard key={organism.id || index} organism={organism} />
               ))}
             </div>
           </div>
@@ -115,16 +146,16 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
               <div className="mt-4 flex gap-4">
                 <div className="bg-cyan-600 px-3 py-1 rounded">
                   <p className="text-cyan-100">
-                    City Survivors: {organisms.filter((o) => o.status === "city_survivor").length}
+                    City Survivors: {safeOrganisms.filter((o) => o.status === "city_survivor").length}
                   </p>
                 </div>
                 <div className="bg-blue-600 px-3 py-1 rounded">
                   <p className="text-blue-100">
-                    City Adapters: {organisms.filter((o) => o.status === "city_adapter").length}
+                    City Adapters: {safeOrganisms.filter((o) => o.status === "city_adapter").length}
                   </p>
                 </div>
                 <div className="bg-red-600 px-3 py-1 rounded">
-                  <p className="text-red-100">Extinct: {organisms.filter((o) => o.status === "extinct").length}</p>
+                  <p className="text-red-100">Extinct: {safeOrganisms.filter((o) => o.status === "extinct").length}</p>
                 </div>
               </div>
             </div>
@@ -139,38 +170,38 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
 
               <TabsContent value="all">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms.map((organism, index) => (
-                    <OrganismCard key={index} organism={organism} />
+                  {safeOrganisms.map((organism, index) => (
+                    <OrganismCard key={organism.id || index} organism={organism} />
                   ))}
                 </div>
               </TabsContent>
 
               <TabsContent value="city_survivor">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "city_survivor")
                     .map((organism, index) => (
-                      <OrganismCard key={index} organism={organism} />
+                      <OrganismCard key={organism.id || index} organism={organism} />
                     ))}
                 </div>
               </TabsContent>
 
               <TabsContent value="city_adapter">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "city_adapter")
                     .map((organism, index) => (
-                      <OrganismCard key={index} organism={organism} />
+                      <OrganismCard key={organism.id || index} organism={organism} />
                     ))}
                 </div>
               </TabsContent>
 
               <TabsContent value="extinct">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "extinct")
                     .map((organism, index) => (
-                      <OrganismCard key={index} organism={organism} />
+                      <OrganismCard key={organism.id || index} organism={organism} />
                     ))}
                 </div>
               </TabsContent>
@@ -180,8 +211,8 @@ export default function CitySimulation({ organisms, onRunSimulation }: CitySimul
       </CardContent>
       <CardFooter className="flex justify-center">
         {phase === "intro" ? (
-          <Button onClick={runSimulation} className="bg-green-600 hover:bg-green-500">
-            Run City Challenge
+          <Button onClick={runSimulation} disabled={isProcessing} className="bg-green-600 hover:bg-green-500">
+            {isProcessing ? "Processing..." : "Run City Challenge"}
           </Button>
         ) : phase === "simulation" ? (
           <p className="text-green-200">Simulation in progress...</p>

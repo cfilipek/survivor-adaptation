@@ -5,6 +5,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AlertCircle } from "lucide-react"
 import type { Organism, Environment } from "@/lib/game-types"
 import OrganismCard from "./organism-card"
 
@@ -25,6 +27,8 @@ export default function EnvironmentSimulation({
 }: EnvironmentSimulationProps) {
   const [phase, setPhase] = useState<"intro" | "simulation" | "results">("intro")
   const [event, setEvent] = useState<string | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const getEnvironmentDescription = (env: Environment) => {
     switch (env) {
@@ -92,8 +96,10 @@ export default function EnvironmentSimulation({
     return environmentEvents[Math.floor(Math.random() * environmentEvents.length)]
   }
 
-  const runSimulation = () => {
+  const runSimulation = async () => {
+    setIsProcessing(true)
     setPhase("simulation")
+    setError(null)
 
     // For "All" environment, generate a combined event message
     if (environment === "All") {
@@ -105,26 +111,36 @@ export default function EnvironmentSimulation({
       setEvent(getRandomEvent(environment as Environment))
     }
 
-    // Call the onRunSimulation prop function
-    // Make sure we're actually calling the function passed from the parent
-    console.log("Calling onRunSimulation from EnvironmentSimulation component")
-    onRunSimulation()
+    try {
+      // Call the onRunSimulation prop function
+      await onRunSimulation()
 
-    // After a delay, show results
-    setTimeout(() => {
-      setPhase("results")
-    }, 3000)
+      // After a delay, show results
+      setTimeout(() => {
+        setPhase("results")
+        setIsProcessing(false)
+      }, 3000)
+    } catch (err) {
+      console.error("Error running simulation:", err)
+      setError("An error occurred while running the simulation. Please try again.")
+      setPhase("intro")
+      setIsProcessing(false)
+    }
   }
 
   const handleNext = () => {
+    if (isProcessing) return
     onMoveToCityPhase()
   }
 
-  const livingOrganisms = organisms.filter((o) => o.status !== "extinct")
+  // Safely filter organisms
+  const safeOrganisms = Array.isArray(organisms) ? organisms.filter(Boolean) : []
+  const livingOrganisms = safeOrganisms.filter((o) => o.status !== "extinct")
 
   // Group organisms by environment
-  const organismsByEnvironment = organisms.reduce(
+  const organismsByEnvironment = safeOrganisms.reduce(
     (acc, organism) => {
+      if (!organism || !organism.environment) return acc
       const env = organism.environment
       if (!acc[env]) acc[env] = []
       acc[env].push(organism)
@@ -149,12 +165,19 @@ export default function EnvironmentSimulation({
           </div>
           <div className="bg-green-700 px-3 py-1 rounded-md">
             <p className="text-green-100">
-              Surviving: {livingOrganisms.length}/{organisms.length}
+              Surviving: {livingOrganisms.length}/{safeOrganisms.length}
             </p>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
         {phase === "intro" && (
           <div className="space-y-4">
             {environment === "All" ? (
@@ -228,20 +251,22 @@ export default function EnvironmentSimulation({
               <div className="text-green-200 whitespace-pre-line">{event}</div>
               <div className="mt-4 flex flex-wrap gap-4">
                 <div className="bg-green-600 px-3 py-1 rounded">
-                  <p className="text-green-100">Thriving: {organisms.filter((o) => o.status === "thriving").length}</p>
+                  <p className="text-green-100">
+                    Thriving: {safeOrganisms.filter((o) => o.status === "thriving").length}
+                  </p>
                 </div>
                 <div className="bg-yellow-600 px-3 py-1 rounded">
                   <p className="text-yellow-100">
-                    Surviving: {organisms.filter((o) => o.status === "surviving").length}
+                    Surviving: {safeOrganisms.filter((o) => o.status === "surviving").length}
                   </p>
                 </div>
                 <div className="bg-orange-600 px-3 py-1 rounded">
                   <p className="text-orange-100">
-                    Struggling: {organisms.filter((o) => o.status === "struggling").length}
+                    Struggling: {safeOrganisms.filter((o) => o.status === "struggling").length}
                   </p>
                 </div>
                 <div className="bg-red-600 px-3 py-1 rounded">
-                  <p className="text-red-100">Extinct: {organisms.filter((o) => o.status === "extinct").length}</p>
+                  <p className="text-red-100">Extinct: {safeOrganisms.filter((o) => o.status === "extinct").length}</p>
                 </div>
               </div>
             </div>
@@ -257,7 +282,7 @@ export default function EnvironmentSimulation({
 
               <TabsContent value="all">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms.map((organism, index) => (
+                  {safeOrganisms.map((organism, index) => (
                     <OrganismCard key={organism.id || index} organism={organism} />
                   ))}
                 </div>
@@ -265,7 +290,7 @@ export default function EnvironmentSimulation({
 
               <TabsContent value="thriving">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "thriving")
                     .map((organism, index) => (
                       <OrganismCard key={organism.id || index} organism={organism} />
@@ -275,7 +300,7 @@ export default function EnvironmentSimulation({
 
               <TabsContent value="surviving">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "surviving")
                     .map((organism, index) => (
                       <OrganismCard key={organism.id || index} organism={organism} />
@@ -285,7 +310,7 @@ export default function EnvironmentSimulation({
 
               <TabsContent value="struggling">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "struggling")
                     .map((organism, index) => (
                       <OrganismCard key={organism.id || index} organism={organism} />
@@ -295,7 +320,7 @@ export default function EnvironmentSimulation({
 
               <TabsContent value="extinct">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {organisms
+                  {safeOrganisms
                     .filter((o) => o.status === "extinct")
                     .map((organism, index) => (
                       <OrganismCard key={organism.id || index} organism={organism} />
@@ -313,11 +338,12 @@ export default function EnvironmentSimulation({
               variant="outline"
               onClick={onMoveToCityPhase}
               className="border-green-600 text-green-100 hover:bg-green-700"
+              disabled={isProcessing}
             >
               Skip to City Phase
             </Button>
-            <Button onClick={runSimulation} className="bg-green-600 hover:bg-green-500">
-              Run Simulation
+            <Button onClick={runSimulation} disabled={isProcessing} className="bg-green-600 hover:bg-green-500">
+              {isProcessing ? "Processing..." : "Run Simulation"}
             </Button>
           </>
         ) : phase === "simulation" ? (
@@ -330,10 +356,11 @@ export default function EnvironmentSimulation({
               variant="outline"
               onClick={onMoveToCityPhase}
               className="border-green-600 text-green-100 hover:bg-green-700"
+              disabled={isProcessing}
             >
               Skip to City Phase
             </Button>
-            <Button onClick={handleNext} className="bg-green-600 hover:bg-green-500">
+            <Button onClick={handleNext} disabled={isProcessing} className="bg-green-600 hover:bg-green-500">
               Move to City Phase
             </Button>
           </>

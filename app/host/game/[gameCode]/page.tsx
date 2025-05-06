@@ -1,17 +1,18 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { useToast } from "@/components/ui/use-toast"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AlertCircle } from "lucide-react"
 import type { Organism, GameState, Environment } from "@/lib/game-types"
 import OrganismCard from "@/components/organism-card"
 import EnvironmentSimulation from "@/components/environment-simulation"
 import CitySimulation from "@/components/city-simulation"
 import ResultsDisplay from "@/components/results-display"
 import { listenForOrganisms, updateGameState, updateOrganisms, deleteGame } from "@/lib/firebase"
-import ConnectionStatus from "@/components/connection-status"
 
 export default function HostGame({ params }: { params: { gameCode: string } }) {
   const { gameCode } = params
@@ -22,6 +23,11 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
   const [gameState, setGameState] = useState<GameState>("waiting")
   const [organisms, setOrganisms] = useState<Organism[]>([])
   const [winners, setWinners] = useState<Organism[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connected" | "connecting" | "disconnected" | "reconnecting"
+  >("connecting")
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     // Load host info from localStorage
@@ -37,28 +43,47 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
     // Set up Firebase listeners with error handling and retry logic
     let unsubscribe: () => void = () => {}
     let retryCount = 0
-    const maxRetries = 3
+    const maxRetries = 5
 
     const setupListener = () => {
       try {
+        setConnectionStatus("connecting")
+
         // Listen for organisms updates from Firebase
         unsubscribe = listenForOrganisms(gameCode, (updatedOrganisms) => {
-          setOrganisms(updatedOrganisms)
+          // Ensure we have valid organisms before setting state
+          if (Array.isArray(updatedOrganisms)) {
+            // Filter out any invalid organisms (missing required fields)
+            const validOrganisms = updatedOrganisms.filter(
+              (organism) =>
+                organism && typeof organism === "object" && organism.name && organism.kingdom && organism.environment,
+            )
+
+            setOrganisms(validOrganisms)
+            setConnectionStatus("connected")
+            setError(null)
+          } else {
+            console.warn("Received non-array organisms data:", updatedOrganisms)
+            // Set to empty array if we get invalid data
+            setOrganisms([])
+          }
         })
 
         retryCount = 0 // Reset retry count on success
       } catch (error) {
         console.error("Error setting up Firebase listener:", error)
+        setConnectionStatus("disconnected")
+        setError("Failed to connect to game data. Please refresh the page.")
 
         if (retryCount < maxRetries) {
           retryCount++
           console.log(`Retrying listener setup (${retryCount}/${maxRetries})...`)
           // Exponential backoff
-          setTimeout(setupListener, 1000 * retryCount)
+          setTimeout(setupListener, 1000 * Math.pow(2, retryCount))
         } else {
           toast({
             title: "Connection Error",
-            description: "Failed to connect to the game data. Please refresh the page.",
+            description: "Failed to connect to the game data after multiple attempts. Please refresh the page.",
             variant: "destructive",
           })
         }
@@ -67,13 +92,21 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
 
     setupListener()
 
+    // Set up connection status monitoring
+    const connectionMonitor = setInterval(() => {
+      if (connectionStatus === "disconnected") {
+        setupListener()
+      }
+    }, 10000) // Check every 10 seconds
+
     return () => {
       if (unsubscribe) unsubscribe()
+      clearInterval(connectionMonitor)
     }
-  }, [gameCode, router, toast])
+  }, [gameCode, router, toast, connectionStatus])
 
   const startGame = async () => {
-    if (organisms.length === 0) {
+    if (!organisms || organisms.length === 0) {
       toast({
         title: "No Organisms",
         description: "Wait for students to join and create organisms",
@@ -81,6 +114,17 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
       })
       return
     }
+
+    if (connectionStatus !== "connected") {
+      toast({
+        title: "Connection Error",
+        description: "You appear to be offline. Please check your connection and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
 
     try {
       // Update game state with retry logic
@@ -109,40 +153,67 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
         description: "Failed to start game. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const runEnvironmentPhase = async () => {
-    console.log("Running environment phase simulation")
+  const runEnvironmentPhase = useCallback(async () => {
+    if (!organisms || !Array.isArray(organisms) || organisms.length === 0) {
+      toast({
+        title: "No Organisms",
+        description: "There are no valid organisms to simulate",
+        variant: "destructive",
+      })
+      return
+    }
 
-    // Process environment survival for all organisms in their chosen environments
-    const updatedOrganisms = organisms.map((organism) => {
-      // Skip already extinct organisms
-      if (organism.status === "extinct") return organism
-
-      // Calculate survival based on organism's chosen environment and stats
-      const compatibility = calculateCompatibility(organism, organism.environment)
-      let newStatus = organism.status
-
-      if (compatibility >= 8) {
-        newStatus = "thriving"
-      } else if (compatibility >= 5) {
-        newStatus = "surviving"
-      } else if (compatibility >= 3) {
-        newStatus = "struggling"
-      } else {
-        newStatus = "extinct"
-      }
-
-      return {
-        ...organism,
-        status: newStatus,
-      }
-    })
+    setIsLoading(true)
 
     try {
-      // Update organisms in Firebase
-      await updateOrganisms(gameCode, updatedOrganisms)
+      // Process environment survival for all organisms in their chosen environments
+      const updatedOrganisms = organisms.map((organism) => {
+        // Skip already extinct organisms or invalid ones
+        if (!organism || organism.status === "extinct") return organism
+
+        // Calculate survival based on organism's chosen environment and stats
+        const compatibility = calculateCompatibility(organism, organism.environment)
+        let newStatus = organism.status
+
+        if (compatibility >= 8) {
+          newStatus = "thriving"
+        } else if (compatibility >= 5) {
+          newStatus = "surviving"
+        } else if (compatibility >= 3) {
+          newStatus = "struggling"
+        } else {
+          newStatus = "extinct"
+        }
+
+        return {
+          ...organism,
+          status: newStatus,
+        }
+      })
+
+      // Update organisms in Firebase with retry logic
+      let success = false
+      let attempts = 0
+      const maxAttempts = 3
+
+      while (!success && attempts < maxAttempts) {
+        try {
+          await updateOrganisms(gameCode, updatedOrganisms)
+          success = true
+        } catch (error) {
+          attempts++
+          console.log(`Update organisms attempt ${attempts} failed, retrying...`)
+          if (attempts >= maxAttempts) throw error
+          // Wait before retrying (exponential backoff)
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempts))
+        }
+      }
+
       setOrganisms(updatedOrganisms)
 
       toast({
@@ -153,77 +224,138 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
       console.error("Error updating organisms:", error)
       toast({
         title: "Error",
-        description: "Failed to update organisms",
+        description: "Failed to update organisms. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setIsLoading(false)
     }
-  }
+  }, [organisms, gameCode, toast])
 
   const moveToCityPhase = async () => {
+    if (connectionStatus !== "connected") {
+      toast({
+        title: "Connection Error",
+        description: "You appear to be offline. Please check your connection and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
+
     try {
       await updateGameState(gameCode, "city")
       setGameState("city")
     } catch (error) {
       toast({
         title: "Error",
-        description: "Failed to update game state",
+        description: "Failed to update game state. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const runCityPhase = async () => {
-    // Process city challenge for all surviving organisms
-    const updatedOrganisms = organisms.map((organism) => {
-      // Skip extinct organisms
-      if (organism.status === "extinct") return organism
+    if (!organisms || !Array.isArray(organisms) || organisms.length === 0) {
+      toast({
+        title: "No Organisms",
+        description: "There are no valid organisms to simulate",
+        variant: "destructive",
+      })
+      return
+    }
 
-      // Calculate city compatibility
-      const cityCompatibility = calculateCityCompatibility(organism)
-      let newStatus = organism.status
-
-      if (cityCompatibility >= 5) {
-        newStatus = "city_survivor"
-      } else if (cityCompatibility >= 3) {
-        newStatus = "city_adapter"
-      } else {
-        newStatus = "extinct"
-      }
-
-      return {
-        ...organism,
-        status: newStatus,
-      }
-    })
+    setIsLoading(true)
 
     try {
-      // Update organisms in Firebase
-      await updateOrganisms(gameCode, updatedOrganisms)
+      // Process city challenge for all surviving organisms
+      const updatedOrganisms = organisms.map((organism) => {
+        // Skip extinct organisms or invalid ones
+        if (!organism || organism.status === "extinct") return organism
+
+        // Calculate city compatibility
+        const cityCompatibility = calculateCityCompatibility(organism)
+        let newStatus = organism.status
+
+        if (cityCompatibility >= 5) {
+          newStatus = "city_survivor"
+        } else if (cityCompatibility >= 3) {
+          newStatus = "city_adapter"
+        } else {
+          newStatus = "extinct"
+        }
+
+        return {
+          ...organism,
+          status: newStatus,
+        }
+      })
+
+      // Update organisms in Firebase with retry logic
+      let success = false
+      let attempts = 0
+      const maxAttempts = 3
+
+      while (!success && attempts < maxAttempts) {
+        try {
+          await updateOrganisms(gameCode, updatedOrganisms)
+          success = true
+        } catch (error) {
+          attempts++
+          console.log(`Update organisms attempt ${attempts} failed, retrying...`)
+          if (attempts >= maxAttempts) throw error
+          // Wait before retrying (exponential backoff)
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempts))
+        }
+      }
+
       setOrganisms(updatedOrganisms)
 
       // Determine winners
-      const survivors = updatedOrganisms.filter((o) => o.status !== "extinct")
+      const survivors = updatedOrganisms.filter((o) => o && o.status !== "extinct")
       setWinners(survivors)
 
       // Move to results phase
       await updateGameState(gameCode, "results")
       setGameState("results")
     } catch (error) {
+      console.error("Error in city phase:", error)
       toast({
         title: "Error",
-        description: "Failed to update game state",
+        description: "Failed to complete city phase. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const resetGame = async () => {
+    if (connectionStatus !== "connected") {
+      toast({
+        title: "Connection Error",
+        description: "You appear to be offline. Please check your connection and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
+
     try {
       // Reset all organisms to alive
-      const resetOrganisms = organisms.map((organism) => ({
-        ...organism,
-        status: "alive",
-      }))
+      const resetOrganisms = organisms
+        .map((organism) => {
+          if (!organism) return null
+          return {
+            ...organism,
+            status: "alive",
+          }
+        })
+        .filter(Boolean) as Organism[]
 
       await updateOrganisms(gameCode, resetOrganisms)
       await updateGameState(gameCode, "waiting")
@@ -237,15 +369,29 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
         description: "The game has been reset and is ready for a new round",
       })
     } catch (error) {
+      console.error("Error resetting game:", error)
       toast({
         title: "Error",
-        description: "Failed to reset game",
+        description: "Failed to reset game. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const endGame = async () => {
+    if (connectionStatus !== "connected") {
+      toast({
+        title: "Connection Error",
+        description: "You appear to be offline. Please check your connection and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
+
     try {
       // Delete the game from Firebase
       await deleteGame(gameCode)
@@ -257,12 +403,46 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
       // Redirect to home
       router.push("/")
     } catch (error) {
+      console.error("Error ending game:", error)
       toast({
         title: "Error",
-        description: "Failed to end game",
+        description: "Failed to end game. Please try again.",
         variant: "destructive",
       })
+      setIsLoading(false)
     }
+  }
+
+  // If there's a connection error, show an error message
+  if (error) {
+    return (
+      <main className="flex min-h-screen flex-col items-center p-8 bg-gradient-to-b from-green-900 to-green-950">
+        <Card className="w-full max-w-md bg-green-800 border-green-700">
+          <CardHeader>
+            <CardTitle className="text-green-100">Connection Error</CardTitle>
+            <CardDescription className="text-green-200">There was a problem connecting to the game</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          </CardContent>
+          <CardFooter className="flex justify-between">
+            <Button
+              variant="outline"
+              onClick={() => router.push("/")}
+              className="border-green-600 text-green-100 hover:bg-green-700"
+            >
+              Return Home
+            </Button>
+            <Button onClick={() => window.location.reload()} className="bg-green-600 hover:bg-green-500">
+              Refresh Page
+            </Button>
+          </CardFooter>
+        </Card>
+      </main>
+    )
   }
 
   return (
@@ -277,24 +457,44 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
           </div>
 
           <div className="flex items-center gap-4">
-            <ConnectionStatus />
             <div className="bg-green-700 px-4 py-2 rounded-md">
-              <p className="text-green-100">Players: {organisms.length}</p>
+              <p className="text-green-100">Players: {organisms?.length || 0}</p>
             </div>
 
+            {connectionStatus !== "connected" && (
+              <div className="bg-yellow-700 px-4 py-2 rounded-md">
+                <p className="text-yellow-100">
+                  {connectionStatus === "connecting"
+                    ? "Connecting..."
+                    : connectionStatus === "reconnecting"
+                      ? "Reconnecting..."
+                      : "Disconnected"}
+                </p>
+              </div>
+            )}
+
             {gameState === "waiting" ? (
-              <Button onClick={startGame} className="bg-green-600 hover:bg-green-500">
-                Start Game
+              <Button
+                onClick={startGame}
+                className="bg-green-600 hover:bg-green-500"
+                disabled={isLoading || !organisms || organisms.length === 0 || connectionStatus !== "connected"}
+              >
+                {isLoading ? "Starting..." : "Start Game"}
               </Button>
             ) : gameState === "results" ? (
               <div className="flex gap-2">
-                <Button onClick={resetGame} className="bg-green-600 hover:bg-green-500">
-                  New Round
+                <Button
+                  onClick={resetGame}
+                  className="bg-green-600 hover:bg-green-500"
+                  disabled={isLoading || connectionStatus !== "connected"}
+                >
+                  {isLoading ? "Processing..." : "New Round"}
                 </Button>
                 <Button
                   onClick={endGame}
                   variant="outline"
                   className="border-green-600 text-green-100 hover:bg-green-700"
+                  disabled={isLoading || connectionStatus !== "connected"}
                 >
                   End Game
                 </Button>
@@ -302,6 +502,15 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
             ) : null}
           </div>
         </div>
+
+        {connectionStatus !== "connected" && connectionStatus !== "connecting" && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              You appear to be offline. The game will continue when your connection is restored.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {gameState === "waiting" ? (
           <Card className="bg-green-800 border-green-700">
@@ -313,11 +522,9 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {organisms.map((organism, index) => (
-                  <OrganismCard key={organism.id || index} organism={organism} />
-                ))}
-
-                {organisms.length === 0 && (
+                {organisms && organisms.length > 0 ? (
+                  organisms.map((organism, index) => <OrganismCard key={organism.id || index} organism={organism} />)
+                ) : (
                   <div className="col-span-full text-center py-12">
                     <p className="text-green-200 text-lg">No organisms yet. Waiting for students to join...</p>
                   </div>
@@ -329,26 +536,34 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
                 variant="outline"
                 onClick={endGame}
                 className="border-green-600 text-green-100 hover:bg-green-700"
+                disabled={isLoading || connectionStatus !== "connected"}
               >
                 Cancel Game
               </Button>
-              <Button onClick={startGame} disabled={organisms.length === 0} className="bg-green-600 hover:bg-green-500">
-                Start Game
+              <Button
+                onClick={startGame}
+                disabled={isLoading || !organisms || organisms.length === 0 || connectionStatus !== "connected"}
+                className="bg-green-600 hover:bg-green-500"
+              >
+                {isLoading ? "Starting..." : "Start Game"}
               </Button>
             </CardFooter>
           </Card>
         ) : gameState === "environment" ? (
           <EnvironmentSimulation
             environment="All"
-            organisms={organisms}
+            organisms={organisms || []}
             onRunSimulation={runEnvironmentPhase}
             onNextEnvironment={() => {}}
             onMoveToCityPhase={moveToCityPhase}
           />
         ) : gameState === "city" ? (
-          <CitySimulation organisms={organisms.filter((o) => o.status !== "extinct")} onRunSimulation={runCityPhase} />
+          <CitySimulation
+            organisms={(organisms || []).filter((o) => o && o.status !== "extinct")}
+            onRunSimulation={runCityPhase}
+          />
         ) : gameState === "results" ? (
-          <ResultsDisplay organisms={organisms} winners={winners} onNewGame={resetGame} />
+          <ResultsDisplay organisms={organisms || []} winners={winners || []} onNewGame={resetGame} />
         ) : null}
       </div>
     </main>
@@ -357,6 +572,10 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
 
 // Helper function to calculate environment compatibility
 function calculateCompatibility(organism: Organism, environment: Environment): number {
+  if (!organism || !organism.stats || typeof organism.stats !== "object") {
+    return 0
+  }
+
   let compatibility = 0
   const stats = organism.stats
 
@@ -418,6 +637,10 @@ function calculateCompatibility(organism: Organism, environment: Environment): n
 
 // Helper function to calculate city compatibility
 function calculateCityCompatibility(organism: Organism): number {
+  if (!organism || !organism.stats || typeof organism.stats !== "object") {
+    return 0
+  }
+
   let compatibility = 0
   const stats = organism.stats
 
