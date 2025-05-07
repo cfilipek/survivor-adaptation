@@ -14,8 +14,13 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import type { Organism, Kingdom, Environment, GameState, StatName } from "@/lib/game-types"
 import { kingdomStats, contraStats } from "@/lib/game-types"
-import { addOrganism, listenForGameState, listenForCurrentEnvironment } from "@/lib/firebase"
-import { connectionStatus } from "@/lib/firebase"
+import {
+  addOrganism,
+  listenForGameState,
+  listenForCurrentEnvironment,
+  reconnectPlayer,
+  useConnectionStatus,
+} from "@/lib/firebase"
 import ConnectionStatus from "@/components/connection-status"
 
 export default function PlayGame({ params }: { params: { gameCode: string } }) {
@@ -37,18 +42,7 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
   const [availablePoints, setAvailablePoints] = useState(11)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasSubmitted, setHasSubmitted] = useState(false)
-  const [connectionState, setConnectionState] = useState<{ isConnected: boolean; isReconnecting: boolean }>({
-    isConnected: true,
-    isReconnecting: false,
-  })
-
-  useEffect(() => {
-    const unsubscribe = connectionStatus.subscribe((status) => {
-      setConnectionState(status)
-    })
-
-    return () => unsubscribe()
-  }, [])
+  const connectionStatus = useConnectionStatus()
 
   useEffect(() => {
     // Load player info from localStorage
@@ -62,6 +56,7 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     } else {
       // If no player name is found, redirect to join page
       router.push("/join")
+      return
     }
 
     // Check if this specific game code has been submitted by this player
@@ -70,51 +65,67 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
       setHasSubmitted(true)
     }
 
+    // Try to reconnect player if they have a stored reference
+    const attemptReconnect = async () => {
+      try {
+        // setConnectionStatus("reconnecting") // Handled by the hook
+        const reconnected = await reconnectPlayer(gameCode)
+        if (reconnected) {
+          console.log("Successfully reconnected to game session")
+        }
+        // setConnectionStatus("connected") // Handled by the hook
+      } catch (error) {
+        console.error("Error reconnecting:", error)
+        // setConnectionStatus("disconnected") // Handled by the hook
+      }
+    }
+
+    attemptReconnect()
+
     // Set up Firebase listeners with error handling
     let unsubscribeGameState: () => void = () => {}
     let unsubscribeEnvironment: () => void = () => {}
-    let retryCount = 0
-    const maxRetries = 3
 
     const setupListeners = () => {
       try {
         // Listen for game state changes
         unsubscribeGameState = listenForGameState(gameCode, (state) => {
           setGameState(state || "waiting")
+          // setConnectionStatus("connected") // Handled by the hook
         })
 
         // Listen for current environment changes
         unsubscribeEnvironment = listenForCurrentEnvironment(gameCode, (environment) => {
           setCurrentEnvironment(environment as Environment)
         })
-
-        retryCount = 0 // Reset retry count on success
       } catch (error) {
         console.error("Error setting up Firebase listeners:", error)
+        // setConnectionStatus("disconnected") // Handled by the hook
 
-        if (retryCount < maxRetries) {
-          retryCount++
-          console.log(`Retrying listener setup (${retryCount}/${maxRetries})...`)
-          // Exponential backoff
-          setTimeout(setupListeners, 1000 * retryCount)
-        } else {
-          toast({
-            title: "Connection Error",
-            description: "Failed to connect to the game. Please refresh the page.",
-            variant: "destructive",
-          })
-        }
+        toast({
+          title: "Connection Error",
+          description: "Failed to connect to the game. Please refresh the page.",
+          variant: "destructive",
+        })
       }
     }
 
     setupListeners()
 
+    // Set up connection status monitoring
+    const connectionMonitor = setInterval(() => {
+      if (connectionStatus === "disconnected") {
+        attemptReconnect()
+      }
+    }, 10000) // Check every 10 seconds
+
     return () => {
       // Clean up listeners
       if (unsubscribeGameState) unsubscribeGameState()
       if (unsubscribeEnvironment) unsubscribeEnvironment()
+      clearInterval(connectionMonitor)
     }
-  }, [gameCode, router, toast])
+  }, [gameCode, router, toast, connectionStatus])
 
   const handleStatChange = (stat: string, value: number) => {
     const currentValue = organism.stats[stat] || 0
@@ -158,6 +169,15 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
       toast({
         title: "Missing Information",
         description: "Please give your organism a name",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (connectionStatus !== "connected") {
+      toast({
+        title: "Connection Error",
+        description: "You appear to be offline. Please check your connection and try again.",
         variant: "destructive",
       })
       return
@@ -214,12 +234,22 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <ConnectionStatus className="mb-4" />
             <div className="w-32 h-32 bg-green-700 rounded-full flex items-center justify-center mb-6">
               <div className="text-4xl">🧬</div>
             </div>
             <h3 className="text-xl font-bold text-green-100 mb-2">{organism.name}</h3>
             <p className="text-green-200 mb-6">Your organism has been submitted!</p>
+
+            {/* {connectionStatus !== "connected" && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  You appear to be offline. The game will continue when your connection is restored.
+                </AlertDescription>
+              </Alert>
+            )} */}
+            <ConnectionStatus />
+
             <p className="text-green-300 text-center max-w-md">
               Watch the teacher's screen to see how your organism performs in the survival challenges.
             </p>
@@ -241,6 +271,21 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
             Game Code: {gameCode} | Player: {playerName}
           </CardDescription>
         </CardHeader>
+
+        {/* {connectionStatus !== "connected" && (
+          <Alert variant="destructive" className="mx-6 mb-2">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              {connectionStatus === "connecting"
+                ? "Connecting to game..."
+                : connectionStatus === "reconnecting"
+                  ? "Reconnecting to game..."
+                  : "You are currently offline. Please check your internet connection."}
+            </AlertDescription>
+          </Alert>
+        )} */}
+        <ConnectionStatus />
+
         <CardContent>
           <Tabs defaultValue="basic" className="w-full">
             <TabsList className="grid grid-cols-3 mb-8">
@@ -403,7 +448,11 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
           >
             Leave Game
           </Button>
-          <Button onClick={handleSubmit} disabled={isSubmitting} className="bg-green-600 hover:bg-green-500">
+          <Button
+            onClick={handleSubmit}
+            disabled={isSubmitting || connectionStatus !== "connected"}
+            className="bg-green-600 hover:bg-green-500"
+          >
             {isSubmitting ? "Submitting..." : "Submit Organism"}
           </Button>
         </CardFooter>

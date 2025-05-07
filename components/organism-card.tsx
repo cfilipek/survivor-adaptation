@@ -1,25 +1,14 @@
-"use client"
-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import type { Organism } from "@/lib/game-types"
-import { useEffect, useState } from "react"
-import { connectionStatus } from "@/lib/firebase"
+import { useConnectionStatus } from "@/lib/firebase"
 
 interface OrganismCardProps {
   organism: Organism & { playerName?: string }
 }
 
 export default function OrganismCard({ organism }: OrganismCardProps) {
-  const [isConnected, setIsConnected] = useState(connectionStatus.isConnected)
-
-  useEffect(() => {
-    const unsubscribe = connectionStatus.subscribe((status) => {
-      setIsConnected(status.isConnected)
-    })
-
-    return () => unsubscribe()
-  }, [])
+  const connectionStatus = useConnectionStatus()
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -83,12 +72,6 @@ export default function OrganismCard({ organism }: OrganismCardProps) {
             {organism.playerName && <p className="text-sm text-green-300">by {organism.playerName}</p>}
           </div>
           <Badge className={`${getStatusColor(organism.status)} capitalize`}>{organism.status.replace("_", " ")}</Badge>
-          {!isConnected && (
-            <div
-              className="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500 animate-pulse"
-              title="Reconnecting..."
-            ></div>
-          )}
         </div>
       </CardHeader>
       <CardContent>

@@ -13,6 +13,8 @@ import EnvironmentSimulation from "@/components/environment-simulation"
 import CitySimulation from "@/components/city-simulation"
 import ResultsDisplay from "@/components/results-display"
 import { listenForOrganisms, updateGameState, updateOrganisms, deleteGame } from "@/lib/firebase"
+import { useConnectionStatus } from "@/lib/firebase"
+import ConnectionStatus from "@/components/connection-status"
 
 export default function HostGame({ params }: { params: { gameCode: string } }) {
   const { gameCode } = params
@@ -24,9 +26,7 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
   const [organisms, setOrganisms] = useState<Organism[]>([])
   const [winners, setWinners] = useState<Organism[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState<
-    "connected" | "connecting" | "disconnected" | "reconnecting"
-  >("connecting")
+  const connectionStatus = useConnectionStatus()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -47,8 +47,6 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
 
     const setupListener = () => {
       try {
-        setConnectionStatus("connecting")
-
         // Listen for organisms updates from Firebase
         unsubscribe = listenForOrganisms(gameCode, (updatedOrganisms) => {
           // Ensure we have valid organisms before setting state
@@ -60,7 +58,6 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
             )
 
             setOrganisms(validOrganisms)
-            setConnectionStatus("connected")
             setError(null)
           } else {
             console.warn("Received non-array organisms data:", updatedOrganisms)
@@ -72,7 +69,6 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
         retryCount = 0 // Reset retry count on success
       } catch (error) {
         console.error("Error setting up Firebase listener:", error)
-        setConnectionStatus("disconnected")
         setError("Failed to connect to game data. Please refresh the page.")
 
         if (retryCount < maxRetries) {
@@ -92,18 +88,10 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
 
     setupListener()
 
-    // Set up connection status monitoring
-    const connectionMonitor = setInterval(() => {
-      if (connectionStatus === "disconnected") {
-        setupListener()
-      }
-    }, 10000) // Check every 10 seconds
-
     return () => {
       if (unsubscribe) unsubscribe()
-      clearInterval(connectionMonitor)
     }
-  }, [gameCode, router, toast, connectionStatus])
+  }, [gameCode, router, toast])
 
   const startGame = async () => {
     if (!organisms || organisms.length === 0) {
@@ -461,17 +449,7 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
               <p className="text-green-100">Players: {organisms?.length || 0}</p>
             </div>
 
-            {connectionStatus !== "connected" && (
-              <div className="bg-yellow-700 px-4 py-2 rounded-md">
-                <p className="text-yellow-100">
-                  {connectionStatus === "connecting"
-                    ? "Connecting..."
-                    : connectionStatus === "reconnecting"
-                      ? "Reconnecting..."
-                      : "Disconnected"}
-                </p>
-              </div>
-            )}
+            <ConnectionStatus />
 
             {gameState === "waiting" ? (
               <Button

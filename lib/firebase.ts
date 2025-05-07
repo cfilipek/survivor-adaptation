@@ -1,3 +1,5 @@
+"use client"
+
 import { initializeApp } from "firebase/app"
 import {
   getDatabase,
@@ -13,6 +15,9 @@ import {
 } from "firebase/database"
 import { getAuth } from "firebase/auth"
 import type { Organism, GameState } from "./game-types"
+
+// Add this near the top of the file, after the imports
+import { useState, useEffect } from "react"
 
 // Your Firebase configuration
 // Replace this with your actual Firebase config from the Firebase console
@@ -31,91 +36,66 @@ const app = initializeApp(firebaseConfig)
 const database = getDatabase(app)
 const auth = getAuth(app)
 
-// Enable offline persistence and connection monitoring
-let connectionStatus: {
-  isConnected: boolean
-  isReconnecting: boolean
-  lastUpdated: number
-  listeners: Set<(status: { isConnected: boolean; isReconnecting: boolean }) => void>
-  subscribe: (callback: (status: { isConnected: boolean; isReconnecting: boolean }) => void) => () => void
-  updateStatus: (connected: boolean, reconnecting: boolean) => void
+// Add these types and variables after initializing Firebase
+export type ConnectionStatus = "connected" | "connecting" | "disconnected" | "reconnecting"
+
+// Create a variable to track the global connection status
+let globalConnectionStatus: ConnectionStatus = "connecting"
+const connectionStatusListeners: ((status: ConnectionStatus) => void)[] = []
+
+// Function to update the global connection status
+const updateConnectionStatus = (status: ConnectionStatus) => {
+  globalConnectionStatus = status
+  // Notify all listeners
+  connectionStatusListeners.forEach((listener) => listener(status))
 }
 
+// Enable offline persistence with increased cache size
 try {
   // Enable offline capabilities
   const connectedRef = ref(database, ".info/connected")
-
-  // Create a connection status object that components can subscribe to
-  connectionStatus = {
-    isConnected: true,
-    isReconnecting: false,
-    lastUpdated: Date.now(),
-    listeners: new Set<(status: { isConnected: boolean; isReconnecting: boolean }) => void>(),
-
-    // Method to subscribe to connection changes
-    subscribe(callback: (status: { isConnected: boolean; isReconnecting: boolean }) => void) {
-      this.listeners.add(callback)
-      // Immediately call with current status
-      callback({ isConnected: this.isConnected, isReconnecting: this.isReconnecting })
-      return () => this.listeners.delete(callback)
-    },
-
-    // Method to update status and notify listeners
-    updateStatus(connected: boolean, reconnecting: boolean) {
-      this.isConnected = connected
-      this.isReconnecting = reconnecting
-      this.lastUpdated = Date.now()
-      this.listeners.forEach((callback) =>
-        callback({ isConnected: this.isConnected, isReconnecting: this.isReconnecting }),
-      )
-    },
-  }
-
   onValue(connectedRef, (snap) => {
-    const connected = snap.val() === true
-
-    if (connected) {
+    if (snap.val() === true) {
       console.log("Connected to Firebase")
-      connectionStatus.updateStatus(true, false)
+      updateConnectionStatus("connected")
     } else {
       console.log("Disconnected from Firebase")
-      connectionStatus.updateStatus(false, true)
-
-      // Set a timeout to check if we're still disconnected after a delay
-      setTimeout(() => {
-        if (!connectionStatus.isConnected) {
-          console.log("Still disconnected after timeout, attempting to reconnect...")
-          // Force a reconnection attempt
-          database.goOnline()
-        }
-      }, 5000)
+      updateConnectionStatus("disconnected")
     }
   })
-
-  // Add additional connection state listeners
-  const dbRef = ref(database, ".info/serverTimeOffset")
-  onValue(
-    dbRef,
-    () => {
-      // If we get here, we have a successful server connection
-      if (connectionStatus.isReconnecting) {
-        console.log("Successfully reconnected to game session")
-        connectionStatus.updateStatus(true, false)
-      }
-    },
-    (error) => {
-      console.error("Error connecting to Firebase:", error)
-      connectionStatus.updateStatus(false, true)
-    },
-  )
 } catch (error) {
   console.error("Error setting up Firebase persistence:", error)
-  if (connectionStatus) {
-    connectionStatus.updateStatus(false, false)
-  }
+  updateConnectionStatus("disconnected")
 }
 
-export { connectionStatus }
+// Hook to use the connection status
+export function useConnectionStatus() {
+  const [status, setStatus] = useState<ConnectionStatus>(globalConnectionStatus)
+
+  useEffect(() => {
+    // Add listener
+    const listener = (newStatus: ConnectionStatus) => {
+      setStatus(newStatus)
+    }
+    connectionStatusListeners.push(listener)
+
+    // Initial status
+    setStatus(globalConnectionStatus)
+
+    // Clean up
+    return () => {
+      const index = connectionStatusListeners.indexOf(listener)
+      if (index > -1) {
+        connectionStatusListeners.splice(index, 1)
+      }
+    }
+  }, [])
+
+  return status
+}
+
+// Export the current connection status for direct access
+export const getConnectionStatus = () => globalConnectionStatus
 
 // Generate a random 6-character game code
 const generateGameCode = () => {
@@ -169,33 +149,38 @@ export const joinGame = async (gameCode: string, playerName: string, maxRetries 
   let retries = 0
   let success = false
   let lastError: any = null
-
-  // Update connection status to show we're attempting to connect
-  connectionStatus.updateStatus(connectionStatus.isConnected, true)
+  let playerRef: any = null
 
   while (retries < maxRetries && !success) {
     try {
       const gameExists = await checkGameExists(gameCode)
       if (!gameExists) {
-        connectionStatus.updateStatus(true, false) // Reset reconnecting state
         throw new Error("Game not found")
       }
 
       // Add player to game with server timestamp
       const playersRef = ref(database, `games/${gameCode}/players`)
       const newPlayerRef = push(playersRef)
+      playerRef = newPlayerRef.key
+
       await set(newPlayerRef, {
         name: playerName,
         joinedAt: serverTimestamp(),
         online: true,
+        lastActive: serverTimestamp(),
       })
+
+      // Store player reference in localStorage for reconnection
+      localStorage.setItem(`player_ref_${gameCode}`, newPlayerRef.key || "")
 
       // Set up disconnect handler
       const onlineRef = ref(database, `games/${gameCode}/players/${newPlayerRef.key}/online`)
       onDisconnect(onlineRef).set(false)
 
+      // Set up heartbeat to keep connection alive
+      setupHeartbeat(gameCode, newPlayerRef.key || "")
+
       success = true
-      connectionStatus.updateStatus(true, false) // Reset reconnecting state
       return true
     } catch (error) {
       lastError = error
@@ -208,9 +193,70 @@ export const joinGame = async (gameCode: string, playerName: string, maxRetries 
 
   if (!success) {
     console.error("Failed to join game after multiple attempts:", lastError)
-    connectionStatus.updateStatus(false, false) // Update to disconnected state
     throw lastError || new Error("Failed to join game")
   }
+}
+
+// Set up a heartbeat to keep the player's online status updated
+const setupHeartbeat = (gameCode: string, playerKey: string) => {
+  // Update last active timestamp every 30 seconds
+  const heartbeatInterval = setInterval(() => {
+    if (!gameCode || !playerKey) {
+      clearInterval(heartbeatInterval)
+      return
+    }
+
+    const lastActiveRef = ref(database, `games/${gameCode}/players/${playerKey}/lastActive`)
+    const onlineRef = ref(database, `games/${gameCode}/players/${playerKey}/online`)
+
+    update(ref(database, `games/${gameCode}/players/${playerKey}`), {
+      lastActive: serverTimestamp(),
+      online: true,
+    }).catch((err) => {
+      console.error("Error updating heartbeat:", err)
+      clearInterval(heartbeatInterval)
+    })
+  }, 30000) // 30 seconds
+
+  // Clean up on page unload
+  window.addEventListener("beforeunload", () => {
+    clearInterval(heartbeatInterval)
+  })
+
+  return () => clearInterval(heartbeatInterval)
+}
+
+// Reconnect player if they have a stored reference
+export const reconnectPlayer = async (gameCode: string) => {
+  const playerKey = localStorage.getItem(`player_ref_${gameCode}`)
+
+  if (playerKey) {
+    try {
+      const playerRef = ref(database, `games/${gameCode}/players/${playerKey}`)
+      const snapshot = await get(playerRef)
+
+      if (snapshot.exists()) {
+        // Player exists, update online status
+        await update(playerRef, {
+          online: true,
+          lastActive: serverTimestamp(),
+        })
+
+        // Set up disconnect handler
+        const onlineRef = ref(database, `games/${gameCode}/players/${playerKey}/online`)
+        onDisconnect(onlineRef).set(false)
+
+        // Set up heartbeat
+        setupHeartbeat(gameCode, playerKey)
+
+        return true
+      }
+    } catch (error) {
+      console.error("Error reconnecting player:", error)
+    }
+  }
+
+  return false
 }
 
 // Add organism to game with retry logic
@@ -219,9 +265,6 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
   let success = false
   let lastError: any = null
   let organismWithPlayer: Organism & { playerName: string; id?: string | null } = { ...organism, playerName }
-
-  // Update connection status to show we're attempting to connect
-  connectionStatus.updateStatus(connectionStatus.isConnected, true)
 
   while (retries < maxRetries && !success) {
     try {
@@ -237,7 +280,6 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
 
       await set(newOrganismRef, organismWithPlayer)
       success = true
-      connectionStatus.updateStatus(true, false) // Reset reconnecting state
     } catch (error) {
       lastError = error
       retries++
@@ -249,7 +291,6 @@ export const addOrganism = async (gameCode: string, playerName: string, organism
 
   if (!success) {
     console.error("Failed to submit organism after multiple attempts:", lastError)
-    connectionStatus.updateStatus(false, false) // Update to disconnected state
     throw lastError || new Error("Failed to submit organism")
   }
 
@@ -273,18 +314,81 @@ export const getOrganisms = async (gameCode: string) => {
   return organisms
 }
 
-// Listen for organisms updates
+// Listen for organisms updates with error handling and reconnection
 export const listenForOrganisms = (gameCode: string, callback: (organisms: Organism[]) => void) => {
   const organismsRef = ref(database, `games/${gameCode}/organisms`)
+  let isFirstConnect = true
+  let retryCount = 0
+  const maxRetries = 5
+  let retryTimeout: NodeJS.Timeout | null = null
 
-  const unsubscribe = onValue(organismsRef, (snapshot) => {
-    const organisms: Organism[] = []
-    snapshot.forEach((childSnapshot) => {
-      organisms.push(childSnapshot.val() as Organism)
-    })
-    callback(organisms)
-  })
+  const setupListener = () => {
+    try {
+      // Immediately call the callback with an empty array to indicate connection attempt
+      if (isFirstConnect) {
+        callback([])
+      }
 
+      const unsubscribe = onValue(
+        organismsRef,
+        (snapshot) => {
+          // Reset retry count on successful connection
+          retryCount = 0
+          if (retryTimeout) {
+            clearTimeout(retryTimeout)
+            retryTimeout = null
+          }
+
+          const organisms: Organism[] = []
+          snapshot.forEach((childSnapshot) => {
+            organisms.push(childSnapshot.val() as Organism)
+          })
+          callback(organisms)
+
+          // If this is the first successful connection, mark it
+          if (isFirstConnect) {
+            isFirstConnect = false
+            console.log("Successfully connected to organisms data")
+          }
+        },
+        (error) => {
+          console.error("Error in organisms listener:", error)
+
+          // Try to reconnect with exponential backoff
+          if (retryCount < maxRetries) {
+            retryCount++
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+            console.log(`Retrying organisms listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+            retryTimeout = setTimeout(() => {
+              if (unsubscribe) unsubscribe()
+              setupListener()
+            }, delay)
+          }
+        },
+      )
+
+      return unsubscribe
+    } catch (error) {
+      console.error("Failed to set up organisms listener:", error)
+
+      // Try to reconnect with exponential backoff
+      if (retryCount < maxRetries) {
+        retryCount++
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+        console.log(`Retrying organisms listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+        retryTimeout = setTimeout(setupListener, delay)
+        return () => {
+          if (retryTimeout) clearTimeout(retryTimeout)
+        }
+      }
+
+      return () => {}
+    }
+  }
+
+  const unsubscribe = setupListener()
   return unsubscribe
 }
 
@@ -296,12 +400,63 @@ export const updateGameState = async (gameCode: string, state: GameState) => {
 // Listen for game state changes
 export const listenForGameState = (gameCode: string, callback: (state: GameState) => void) => {
   const stateRef = ref(database, `games/${gameCode}/state`)
+  let retryCount = 0
+  const maxRetries = 5
+  let retryTimeout: NodeJS.Timeout | null = null
 
-  const unsubscribe = onValue(stateRef, (snapshot) => {
-    const state = snapshot.val() as GameState
-    callback(state)
-  })
+  const setupListener = () => {
+    try {
+      const unsubscribe = onValue(
+        stateRef,
+        (snapshot) => {
+          // Reset retry count on successful connection
+          retryCount = 0
+          if (retryTimeout) {
+            clearTimeout(retryTimeout)
+            retryTimeout = null
+          }
 
+          const state = snapshot.val() as GameState
+          callback(state)
+        },
+        (error) => {
+          console.error("Error in game state listener:", error)
+
+          // Try to reconnect with exponential backoff
+          if (retryCount < maxRetries) {
+            retryCount++
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+            console.log(`Retrying game state listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+            retryTimeout = setTimeout(() => {
+              if (unsubscribe) unsubscribe()
+              setupListener()
+            }, delay)
+          }
+        },
+      )
+
+      return unsubscribe
+    } catch (error) {
+      console.error("Failed to set up game state listener:", error)
+
+      // Try to reconnect with exponential backoff
+      if (retryCount < maxRetries) {
+        retryCount++
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+        console.log(`Retrying game state listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+        retryTimeout = setTimeout(setupListener, delay)
+        return () => {
+          if (retryTimeout) clearTimeout(retryTimeout)
+        }
+      }
+
+      return () => {}
+    }
+  }
+
+  const unsubscribe = setupListener()
   return unsubscribe
 }
 
@@ -326,12 +481,63 @@ export const updateCurrentEnvironment = async (gameCode: string, environment: st
 // Listen for current environment changes
 export const listenForCurrentEnvironment = (gameCode: string, callback: (environment: string) => void) => {
   const environmentRef = ref(database, `games/${gameCode}/currentEnvironment`)
+  let retryCount = 0
+  const maxRetries = 5
+  let retryTimeout: NodeJS.Timeout | null = null
 
-  const unsubscribe = onValue(environmentRef, (snapshot) => {
-    const environment = snapshot.val()
-    callback(environment || "Grassland") // Default to Grassland if not set
-  })
+  const setupListener = () => {
+    try {
+      const unsubscribe = onValue(
+        environmentRef,
+        (snapshot) => {
+          // Reset retry count on successful connection
+          retryCount = 0
+          if (retryTimeout) {
+            clearTimeout(retryTimeout)
+            retryTimeout = null
+          }
 
+          const environment = snapshot.val()
+          callback(environment || "Grassland") // Default to Grassland if not set
+        },
+        (error) => {
+          console.error("Error in environment listener:", error)
+
+          // Try to reconnect with exponential backoff
+          if (retryCount < maxRetries) {
+            retryCount++
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+            console.log(`Retrying environment listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+            retryTimeout = setTimeout(() => {
+              if (unsubscribe) unsubscribe()
+              setupListener()
+            }, delay)
+          }
+        },
+      )
+
+      return unsubscribe
+    } catch (error) {
+      console.error("Failed to set up environment listener:", error)
+
+      // Try to reconnect with exponential backoff
+      if (retryCount < maxRetries) {
+        retryCount++
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000) // Max 30 second delay
+        console.log(`Retrying environment listener in ${delay}ms (attempt ${retryCount}/${maxRetries})`)
+
+        retryTimeout = setTimeout(setupListener, delay)
+        return () => {
+          if (retryTimeout) clearTimeout(retryTimeout)
+        }
+      }
+
+      return () => {}
+    }
+  }
+
+  const unsubscribe = setupListener()
   return unsubscribe
 }
 
