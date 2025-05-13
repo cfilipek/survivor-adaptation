@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import type { Organism, Kingdom, Environment, GameState, StatName } from "@/lib/game-types"
-import { kingdomStats, contraStats } from "@/lib/game-types"
+import { kingdomStats, contraStats, statDescriptions, inherentTraits } from "@/lib/game-types"
 import {
   addOrganism,
   listenForGameState,
@@ -44,6 +44,27 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
   const [hasSubmitted, setHasSubmitted] = useState(false)
   const connectionStatus = useConnectionStatus()
 
+  // Function to calculate used points, excluding inherent traits
+  const calculateUsedPoints = (stats: Record<string, number>, kingdom: Kingdom) => {
+    let total = 0
+    Object.entries(stats).forEach(([stat, value]) => {
+      // Only count points for non-inherent traits
+      if (!inherentTraits[kingdom].includes(stat as StatName)) {
+        total += value
+      }
+    })
+    return total
+  }
+
+  // Function to set inherent traits for a kingdom
+  const setInherentTraitsForKingdom = (kingdom: Kingdom, currentStats: Record<string, number>) => {
+    const newStats = { ...currentStats }
+    inherentTraits[kingdom].forEach((trait) => {
+      newStats[trait] = 5 // Set inherent traits to maximum value
+    })
+    return newStats
+  }
+
   useEffect(() => {
     // Load player info from localStorage
     const storedName = localStorage.getItem("playerName")
@@ -68,15 +89,12 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     // Try to reconnect player if they have a stored reference
     const attemptReconnect = async () => {
       try {
-        // setConnectionStatus("reconnecting") // Handled by the hook
         const reconnected = await reconnectPlayer(gameCode)
         if (reconnected) {
           console.log("Successfully reconnected to game session")
         }
-        // setConnectionStatus("connected") // Handled by the hook
       } catch (error) {
         console.error("Error reconnecting:", error)
-        // setConnectionStatus("disconnected") // Handled by the hook
       }
     }
 
@@ -91,7 +109,6 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
         // Listen for game state changes
         unsubscribeGameState = listenForGameState(gameCode, (state) => {
           setGameState(state || "waiting")
-          // setConnectionStatus("connected") // Handled by the hook
         })
 
         // Listen for current environment changes
@@ -100,7 +117,6 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
         })
       } catch (error) {
         console.error("Error setting up Firebase listeners:", error)
-        // setConnectionStatus("disconnected") // Handled by the hook
 
         toast({
           title: "Connection Error",
@@ -127,7 +143,33 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     }
   }, [gameCode, router, toast, connectionStatus])
 
+  // Effect to handle kingdom changes and set inherent traits
+  useEffect(() => {
+    // Set inherent traits for the selected kingdom
+    const newStats = setInherentTraitsForKingdom(organism.kingdom, organism.stats)
+
+    setOrganism((prev) => ({
+      ...prev,
+      stats: newStats,
+    }))
+
+    // Recalculate available points (excluding inherent traits)
+    const usedPoints = calculateUsedPoints(newStats, organism.kingdom)
+    setAvailablePoints(11 - usedPoints)
+  }, [organism.kingdom])
+
+  // Update the handleStatChange function to handle inherent traits
   const handleStatChange = (stat: string, value: number) => {
+    // Check if this is an inherent trait
+    if (inherentTraits[organism.kingdom].includes(stat as StatName)) {
+      toast({
+        title: "Inherent Trait",
+        description: `${stat.replace(/([A-Z])/g, " $1").trim()} is an inherent trait of ${organism.kingdom}s and cannot be modified.`,
+        variant: "destructive",
+      })
+      return
+    }
+
     const currentValue = organism.stats[stat] || 0
     const change = value - currentValue
 
@@ -147,6 +189,11 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
     // Apply contra-stats effects
     if (contraStats[stat as StatName] && change > 0) {
       contraStats[stat as StatName].forEach((contraStat) => {
+        // Skip reducing inherent traits
+        if (inherentTraits[organism.kingdom].includes(contraStat)) {
+          return
+        }
+
         // Reduce contra-stats by 2 points per point added, but don't go below 0
         const currentContraValue = newStats[contraStat] || 0
         const newContraValue = Math.max(0, currentContraValue - change * 2)
@@ -159,8 +206,8 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
       stats: newStats,
     }))
 
-    // Recalculate available points
-    const usedPoints = Object.values(newStats).reduce((sum, val) => sum + val, 0)
+    // Recalculate available points (excluding inherent traits)
+    const usedPoints = calculateUsedPoints(newStats, organism.kingdom)
     setAvailablePoints(11 - usedPoints)
   }
 
@@ -240,14 +287,6 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
             <h3 className="text-xl font-bold text-green-100 mb-2">{organism.name}</h3>
             <p className="text-green-200 mb-6">Your organism has been submitted!</p>
 
-            {/* {connectionStatus !== "connected" && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  You appear to be offline. The game will continue when your connection is restored.
-                </AlertDescription>
-              </Alert>
-            )} */}
             <ConnectionStatus />
 
             <p className="text-green-300 text-center max-w-md">
@@ -272,18 +311,6 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
           </CardDescription>
         </CardHeader>
 
-        {/* {connectionStatus !== "connected" && (
-          <Alert variant="destructive" className="mx-6 mb-2">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              {connectionStatus === "connecting"
-                ? "Connecting to game..."
-                : connectionStatus === "reconnecting"
-                  ? "Reconnecting to game..."
-                  : "You are currently offline. Please check your internet connection."}
-            </AlertDescription>
-          </Alert>
-        )} */}
         <ConnectionStatus />
 
         <CardContent>
@@ -365,36 +392,48 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
               <Progress value={((11 - availablePoints) / 11) * 100} className="h-2 bg-green-700" />
 
               <div className="space-y-6">
-                {availableStats.map((stat) => (
-                  <div key={stat} className="space-y-2">
-                    <div className="flex justify-between">
-                      <div>
-                        <Label htmlFor={stat} className="text-green-100 capitalize">
-                          {stat.replace(/([A-Z])/g, " $1").trim()}
-                        </Label>
-                        {contraStats[stat] && contraStats[stat].length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {contraStats[stat].map((contraStat) => (
-                              <Badge key={contraStat} variant="outline" className="text-xs text-red-300 border-red-400">
-                                -{contraStat.replace(/([A-Z])/g, " $1").trim()}
-                              </Badge>
-                            ))}
+                {availableStats.map((stat) => {
+                  const isInherent = inherentTraits[organism.kingdom].includes(stat as StatName)
+                  return (
+                    <div key={stat} className="space-y-2">
+                      <div className="flex justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <Label htmlFor={stat} className="text-green-100 capitalize">
+                              {stat.replace(/([A-Z])/g, " $1").trim()}
+                            </Label>
+                            {isInherent && <Badge className="bg-yellow-600 text-yellow-100">Inherent</Badge>}
                           </div>
-                        )}
+                          <p className="text-xs text-green-300 mt-1">{statDescriptions[stat as StatName]}</p>
+                          {contraStats[stat as StatName] && contraStats[stat as StatName].length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {contraStats[stat as StatName].map((contraStat) => (
+                                <Badge
+                                  key={contraStat}
+                                  variant="outline"
+                                  className="text-xs text-red-300 border-red-400"
+                                >
+                                  -{contraStat.replace(/([A-Z])/g, " $1").trim()}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-green-100">{organism.stats[stat] || 0}</span>
                       </div>
-                      <span className="text-green-100">{organism.stats[stat] || 0}</span>
+                      <Slider
+                        id={stat}
+                        min={0}
+                        max={5}
+                        step={1}
+                        value={[organism.stats[stat] || 0]}
+                        onValueChange={([value]) => handleStatChange(stat, value)}
+                        className={`bg-green-700 ${isInherent ? "opacity-50 cursor-not-allowed" : ""}`}
+                        disabled={isInherent}
+                      />
                     </div>
-                    <Slider
-                      id={stat}
-                      min={0}
-                      max={5}
-                      step={1}
-                      value={[organism.stats[stat] || 0]}
-                      onValueChange={([value]) => handleStatChange(stat, value)}
-                      className="bg-green-700"
-                    />
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </TabsContent>
 
@@ -406,16 +445,39 @@ export default function PlayGame({ params }: { params: { gameCode: string } }) {
 
                 <h4 className="text-lg font-medium text-green-100 mt-4 mb-2">Adaptations:</h4>
                 {Object.keys(organism.stats).length > 0 ? (
-                  <ul className="grid grid-cols-2 gap-2">
-                    {Object.entries(organism.stats).map(
-                      ([stat, value]) =>
-                        value > 0 && (
-                          <li key={stat} className="text-green-200">
-                            <span className="capitalize">{stat.replace(/([A-Z])/g, " $1").trim()}</span>: {value}
-                          </li>
-                        ),
-                    )}
-                  </ul>
+                  <div className="space-y-4">
+                    {/* Inherent traits section */}
+                    <div>
+                      <h5 className="text-md font-medium text-yellow-300">Inherent Traits:</h5>
+                      <ul className="grid grid-cols-2 gap-2 mt-1">
+                        {Object.entries(organism.stats).map(
+                          ([stat, value]) =>
+                            value > 0 &&
+                            inherentTraits[organism.kingdom].includes(stat as StatName) && (
+                              <li key={stat} className="text-green-200">
+                                <span className="capitalize">{stat.replace(/([A-Z])/g, " $1").trim()}</span>: {value}
+                              </li>
+                            ),
+                        )}
+                      </ul>
+                    </div>
+
+                    {/* Acquired traits section */}
+                    <div>
+                      <h5 className="text-md font-medium text-green-300">Acquired Traits:</h5>
+                      <ul className="grid grid-cols-2 gap-2 mt-1">
+                        {Object.entries(organism.stats).map(
+                          ([stat, value]) =>
+                            value > 0 &&
+                            !inherentTraits[organism.kingdom].includes(stat as StatName) && (
+                              <li key={stat} className="text-green-200">
+                                <span className="capitalize">{stat.replace(/([A-Z])/g, " $1").trim()}</span>: {value}
+                              </li>
+                            ),
+                        )}
+                      </ul>
+                    </div>
+                  </div>
                 ) : (
                   <p className="text-green-300 italic">No adaptations selected</p>
                 )}

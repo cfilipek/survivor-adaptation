@@ -7,7 +7,9 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { useToast } from "@/components/ui/use-toast"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
+// Update the imports to include the new types and constants
 import type { Organism, GameState, Environment } from "@/lib/game-types"
+import { inherentTraits } from "@/lib/game-types"
 import OrganismCard from "@/components/organism-card"
 import EnvironmentSimulation from "@/components/environment-simulation"
 import CitySimulation from "@/components/city-simulation"
@@ -557,36 +559,137 @@ function calculateCompatibility(organism: Organism, environment: Environment): n
   let compatibility = 0
   const stats = organism.stats
 
+  // Add inherent trait bonuses
+  const traits = inherentTraits[organism.kingdom]
+  if (traits && traits.length > 0) {
+    traits.forEach((trait) => {
+      compatibility += 1.0 // Base bonus for having an inherent trait
+    })
+  }
+
   switch (environment) {
     case "Grassland":
+      // Animal stats
       compatibility += (stats.agility || 0) * 0.8
-      compatibility += (stats.resilience || 0) * 0.6
-      compatibility += (stats.heatResistance || 0) * 0.4
-      compatibility += (stats.sociability || 0) * 0.5
-      compatibility -= (stats.temerity || 0) * 0.3
+      compatibility += (stats.strength || 0) * 0.6
+      compatibility += (stats.sociability || 0) * 0.7
+      compatibility += (stats.opportunism || 0) * 0.4
+
+      // Plant stats
+      compatibility += (stats.photosynthesis || 0) * 1.0
+      compatibility += (stats.height || 0) * 0.8
+      compatibility += (stats.perennial || 0) * 0.6
+
+      // Fungi stats
+      compatibility += (stats.decomposer || 0) * 0.5
+      compatibility += (stats.symbiotic || 0) * 0.7
+
+      // Protist stats
+      compatibility += (stats.aquatic || 0) * 0.3
+
+      // Bacteria stats
+      compatibility += (stats.beneficial || 0) * 0.6
+
+      // Archaea stats
+      compatibility += (stats.extremophile || 0) * 0.3
+
+      // Common stats
+      compatibility += (stats.heatResistance || 0) * 0.5
+      compatibility -= (stats.coldResistance || 0) * 0.3
       break
 
     case "Desert":
+      // Animal stats
+      compatibility += (stats.nocturnal || 0) * 0.9
+      compatibility += (stats.audacity || 0) * 0.7
+      compatibility += (stats.stealth || 0) * 0.6
+
+      // Plant stats
+      compatibility += (stats.succulence || 0) * 1.0
+      compatibility += (stats.spinescence || 0) * 0.8
+      compatibility += (stats.waxiness || 0) * 0.7
+
+      // Fungi stats
+      compatibility += (stats.unicellular || 0) * 0.6
+      compatibility += (stats.imperfect || 0) * 0.5
+
+      // Protist stats
+      compatibility -= (stats.aquatic || 0) * 0.8
+
+      // Bacteria stats
+      compatibility += (stats.mutation || 0) * 0.8
+      compatibility += (stats.antibioticResistance || 0) * 0.6
+
+      // Archaea stats
+      compatibility += (stats.extremophile || 0) * 1.0
+      compatibility += (stats.thermophilic || 0) * 0.9
+      compatibility += (stats.halophilic || 0) * 0.8
+
+      // Common stats
       compatibility += (stats.heatResistance || 0) * 1.0
-      compatibility += (stats.resilience || 0) * 0.8
-      compatibility += (stats.opportunism || 0) * 0.6
       compatibility -= (stats.coldResistance || 0) * 0.8
-      compatibility += (stats.temerity || 0) * 0.4
       break
 
     case "Tundra":
+      // Animal stats
       compatibility += (stats.coldResistance || 0) * 1.0
-      compatibility += (stats.resilience || 0) * 0.8
-      compatibility += (stats.sociability || 0) * 0.6
-      compatibility -= (stats.heatResistance || 0) * 0.6
+      compatibility += (stats.sociability || 0) * 0.8
+      compatibility += (stats.strength || 0) * 0.7
+
+      // Plant stats
+      compatibility += (stats.perennial || 0) * 0.9
+      compatibility += (stats.flexibility || 0) * 0.7
+
+      // Fungi stats
+      compatibility += (stats.perfect || 0) * 0.6
+
+      // Protist stats
+      compatibility += (stats.aquatic || 0) * 0.5
+      compatibility += (stats.cilia || 0) * 0.4
+
+      // Bacteria stats
+      compatibility += (stats.anaerobic || 0) * 0.7
+
+      // Archaea stats
+      compatibility += (stats.extremophile || 0) * 0.9
+      compatibility += (stats.psychrophilic || 0) * 1.0
+
+      // Common stats
+      compatibility += (stats.coldResistance || 0) * 1.0
+      compatibility -= (stats.heatResistance || 0) * 0.8
       break
 
     case "Jungle":
-      compatibility += (stats.agility || 0) * 0.8
-      compatibility += (stats.vision || 0) * 0.7
-      compatibility += (stats.intelligence || 0) * 0.5
-      compatibility += (stats.heatResistance || 0) * 0.4
-      compatibility += (stats.fertility || 0) * 0.6
+      // Animal stats
+      compatibility += (stats.agility || 0) * 0.9
+      compatibility += (stats.acuteSense || 0) * 0.8
+      compatibility += (stats.intelligence || 0) * 0.7
+
+      // Plant stats
+      compatibility += (stats.photosynthesis || 0) * 0.9
+      compatibility += (stats.height || 0) * 0.8
+      compatibility += (stats.hairiness || 0) * 0.7
+
+      // Fungi stats
+      compatibility += (stats.decomposer || 0) * 0.9
+      compatibility += (stats.parasitic || 0) * 0.8
+      compatibility += (stats.multicellular || 0) * 0.7
+
+      // Protist stats
+      compatibility += (stats.aquatic || 0) * 1.0
+      compatibility += (stats.flagella || 0) * 0.7
+      compatibility += (stats.photosynthetic || 0) * 0.8
+
+      // Bacteria stats
+      compatibility += (stats.aerobic || 0) * 0.7
+      compatibility += (stats.coevolution || 0) * 0.8
+
+      // Archaea stats
+      compatibility += (stats.acidophilic || 0) * 0.6
+
+      // Common stats
+      compatibility += (stats.heatResistance || 0) * 0.7
+      compatibility += (stats.coldResistance || 0) * 0.3
       break
   }
 
@@ -594,6 +697,7 @@ function calculateCompatibility(organism: Organism, environment: Environment): n
   switch (organism.kingdom) {
     case "Animal":
       if (environment === "Grassland") compatibility += 1.0
+      if (environment === "Jungle") compatibility += 0.8
       break
     case "Plant":
       if (environment === "Grassland" || environment === "Jungle") compatibility += 1.0
@@ -602,11 +706,14 @@ function calculateCompatibility(organism: Organism, environment: Environment): n
       if (environment === "Jungle") compatibility += 1.0
       break
     case "Protist":
-      if (environment === "Jungle") compatibility += 0.5
+      if (environment === "Jungle") compatibility += 0.8
       break
     case "Bacteria":
-    case "Archaea":
       compatibility += 0.5 // Adaptable to all environments
+      break
+    case "Archaea":
+      if (environment === "Desert") compatibility += 1.0
+      if (environment === "Tundra") compatibility += 0.8
       break
   }
 
@@ -622,12 +729,51 @@ function calculateCityCompatibility(organism: Organism): number {
   let compatibility = 0
   const stats = organism.stats
 
-  compatibility += (stats.adaptability || 0) * 1.0
-  compatibility += (stats.intelligence || 0) * 0.8
-  compatibility += (stats.resilience || 0) * 0.7
-  compatibility += (stats.resourcefulness || 0) * 0.9
-  compatibility += (stats.opportunism || 0) * 0.6
-  compatibility += (stats.sociability || 0) * 0.5
+  // Add inherent trait bonuses
+  const traits = inherentTraits[organism.kingdom]
+  if (traits && traits.length > 0) {
+    traits.forEach((trait) => {
+      if (trait === "mutation" || trait === "horizontalGeneTransfer") {
+        compatibility += 1.5 // Higher bonus for bacterial traits in city
+      } else {
+        compatibility += 0.5 // Base bonus for having an inherent trait
+      }
+    })
+  }
+
+  // Animal stats
+  compatibility += (stats.intelligence || 0) * 1.0
+  compatibility += (stats.opportunism || 0) * 0.9
+  compatibility += (stats.sociability || 0) * 0.8
+  compatibility += (stats.nocturnal || 0) * 0.7
+  compatibility += (stats.audacity || 0) * 0.6
+
+  // Plant stats
+  compatibility += (stats.flexibility || 0) * 0.7
+  compatibility += (stats.annual || 0) * 0.6
+  compatibility -= (stats.height || 0) * 0.5
+
+  // Fungi stats
+  compatibility += (stats.decomposer || 0) * 0.9
+  compatibility += (stats.parasitic || 0) * 0.8
+  compatibility += (stats.unicellular || 0) * 0.7
+
+  // Protist stats
+  compatibility += (stats.absorptive || 0) * 0.6
+
+  // Bacteria stats
+  compatibility += (stats.mutation || 0) * 1.0
+  compatibility += (stats.horizontalGeneTransfer || 0) * 0.9
+  compatibility += (stats.antibioticResistance || 0) * 0.8
+  compatibility += (stats.beneficial || 0) * 0.7
+
+  // Archaea stats
+  compatibility += (stats.extremophile || 0) * 0.8
+  compatibility += (stats.acidophilic || 0) * 0.7
+  compatibility += (stats.alkaliphilic || 0) * 0.6
+
+  // Common stats
+  compatibility += (stats.heatResistance || 0) * 0.5
 
   // Kingdom-specific bonuses
   switch (organism.kingdom) {
@@ -640,8 +786,14 @@ function calculateCityCompatibility(organism: Organism): number {
     case "Fungi":
       compatibility += 1
       break
+    case "Animal":
+      compatibility += 0.5
+      break
     case "Plant":
       compatibility -= 1
+      break
+    case "Protist":
+      compatibility -= 0.5
       break
   }
 
