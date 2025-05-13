@@ -437,7 +437,7 @@ export default function HostGame({ params }: { params: { gameCode: string } }) {
 
   return (
     <main className="flex min-h-screen flex-col items-center p-8 bg-gradient-to-b from-green-900 to-green-950">
-      <div className="w-full max-w-6xl">
+      <div className="w-full max-w-8xl">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-green-100">Survivor: Adaptation</h1>
